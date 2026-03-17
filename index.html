@@ -32,7 +32,9 @@
     .btn{appearance:none; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.08); color:var(--text); border-radius: 12px; padding: 10px 12px; font-weight: 800; box-shadow: 0 10px 30px var(--shadow);}
     .btn:active{transform: translateY(1px);}
 
-    canvas{width:100%; height:auto; aspect-ratio: 9/16; border-radius: 18px; border:1px solid rgba(255,255,255,.12); background: linear-gradient(180deg, rgba(14,42,68,.8), rgba(10,34,56,.9)); box-shadow: 0 18px 55px var(--shadow);
+    canvas{width:100%; height:auto; aspect-ratio: 9/16; border-radius: 18px; border:1px solid rgba(255,255,255,.12);
+      background: linear-gradient(180deg, rgba(14,42,68,.8), rgba(10,34,56,.9));
+      box-shadow: 0 18px 55px var(--shadow);
       touch-action: none; -webkit-user-select:none; user-select:none;
     }
 
@@ -57,6 +59,7 @@
         <div class="pill" id="scorePill">Score <small id="score">0</small></div>
         <div class="pill" id="streakPill">Streak <small id="streak">0</small></div>
       </div>
+      <button class="btn" id="soundBtn" aria-label="Sound" title="Sound">Sound: Off</button>
       <button class="btn" id="pauseBtn" aria-label="Pause">Pause</button>
     </div>
 
@@ -94,10 +97,107 @@
   const startBtn = document.getElementById('startBtn');
   const howBtn = document.getElementById('howBtn');
   const pauseBtn = document.getElementById('pauseBtn');
+  const soundBtn = document.getElementById('soundBtn');
 
   // Coordinate system is canvas pixels.
   const W = canvas.width;
   const H = canvas.height;
+
+  // --- Sound (no external files; WebAudio synth SFX) ---
+  const sound = {
+    enabled: false,
+    ctx: null,
+    master: null,
+  };
+
+  function ensureAudio(){
+    if (sound.ctx) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    sound.ctx = new AC();
+    sound.master = sound.ctx.createGain();
+    sound.master.gain.value = 0.45;
+    sound.master.connect(sound.ctx.destination);
+  }
+
+  async function unlockAudio(){
+    try {
+      ensureAudio();
+      if (sound.ctx.state !== 'running') await sound.ctx.resume();
+    } catch (_) {}
+  }
+
+  function setSoundEnabled(v){
+    sound.enabled = !!v;
+    soundBtn.textContent = sound.enabled ? 'Sound: On' : 'Sound: Off';
+    if (sound.enabled) unlockAudio();
+  }
+
+  function now(){ return sound.ctx ? sound.ctx.currentTime : 0; }
+
+  function beep({type='sine', f0=440, f1=null, dur=0.08, gain=0.25, attack=0.004, release=0.05} = {}){
+    if (!sound.enabled) return;
+    ensureAudio();
+    const t0 = now() + 0.001;
+    const t1 = t0 + dur;
+
+    const osc = sound.ctx.createOscillator();
+    const g = sound.ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(f0, t0);
+    if (f1 != null) osc.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t1);
+
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), t0 + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t1 + release);
+
+    osc.connect(g);
+    g.connect(sound.master);
+    osc.start(t0);
+    osc.stop(t1 + release);
+  }
+
+  function noiseHit({dur=0.06, gain=0.22} = {}){
+    if (!sound.enabled) return;
+    ensureAudio();
+    const t0 = now() + 0.001;
+    const t1 = t0 + dur;
+
+    const bufferSize = Math.max(1, Math.floor(sound.ctx.sampleRate * dur));
+    const buffer = sound.ctx.createBuffer(1, bufferSize, sound.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i=0;i<bufferSize;i++){
+      // quick "tick" noise with decay
+      const x = (1 - i/bufferSize);
+      data[i] = (Math.random()*2-1) * x;
+    }
+
+    const src = sound.ctx.createBufferSource();
+    src.buffer = buffer;
+
+    const bp = sound.ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.setValueAtTime(1200, t0);
+    bp.Q.setValueAtTime(2.4, t0);
+
+    const g = sound.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.004);
+    g.gain.exponentialRampToValueAtTime(0.0001, t1);
+
+    src.connect(bp);
+    bp.connect(g);
+    g.connect(sound.master);
+    src.start(t0);
+    src.stop(t1);
+  }
+
+  const sfx = {
+    shoot(strength=0.6){ beep({type:'triangle', f0:420+240*strength, f1:220, dur:0.07, gain:0.18+0.12*strength}); },
+    goal(){ beep({type:'square', f0:660, f1:990, dur:0.10, gain:0.22}); beep({type:'square', f0:990, f1:1320, dur:0.10, gain:0.18}); },
+    save(){ noiseHit({dur:0.05, gain:0.22}); beep({type:'sine', f0:220, f1:160, dur:0.08, gain:0.14}); },
+    board(){ noiseHit({dur:0.035, gain:0.16}); },
+    ui(){ beep({type:'sine', f0:520, f1:640, dur:0.045, gain:0.12}); }
+  };
 
   // Rink dimensions within canvas.
   const rink = { x: W*0.08, y: H*0.08, w: W*0.84, h: H*0.84 };
@@ -242,6 +342,8 @@
     puck.vy = dirY * v;
     puck.active = true;
 
+    sfx.shoot(power / (W*0.6));
+
     // Add a little spin based on lateral component.
     puck.spin = clamp(dirX * 1.4, -1.2, 1.2);
 
@@ -298,17 +400,20 @@
         puck.x = b.left + puck.r;
         puck.vx *= -0.92;
         puck.spin *= -0.8;
+        sfx.board();
       }
       if (puck.x + puck.r > b.right){
         puck.x = b.right - puck.r;
         puck.vx *= -0.92;
         puck.spin *= -0.8;
+        sfx.board();
       }
 
       // Top boards (behind net) bounce
       if (puck.y - puck.r < b.top){
         puck.y = b.top + puck.r;
         puck.vy *= -0.7;
+        sfx.board();
       }
 
       // Check for save/collision with goalie (simple AABB)
@@ -324,6 +429,7 @@
         puck.vx *= 0.6;
         puck.spin *= 0.25;
         setMessage('Saved!');
+        sfx.save();
         state.streak = 0;
         hud();
       }
@@ -343,6 +449,7 @@
         hud();
 
         setMessage(points > 1 ? `GOAL! +${points}` : 'GOAL!');
+        sfx.goal();
 
         // New round after a short delay
         puck.active = false;
@@ -364,9 +471,15 @@
     // background
     ctx.clearRect(0,0,W,H);
 
+    // SVG-style gradients (cached each frame; cheap enough at this scale)
+    const iceGrad = ctx.createLinearGradient(0, rink.y, 0, rink.y + rink.h);
+    iceGrad.addColorStop(0, 'rgba(180,235,255,.16)');
+    iceGrad.addColorStop(0.45, 'rgba(210,245,255,.07)');
+    iceGrad.addColorStop(1, 'rgba(70,140,200,.10)');
+
     // Rink
     const rx = rink.x, ry = rink.y, rw = rink.w, rh = rink.h;
-    roundRect(rx, ry, rw, rh, 22, 'rgba(255,255,255,.06)', 'rgba(255,255,255,.10)');
+    roundRect(rx, ry, rw, rh, 22, iceGrad, 'rgba(255,255,255,.14)');
 
     // Ice pattern
     ctx.save();
@@ -377,31 +490,58 @@
     // subtle stripes
     for (let i=0;i<18;i++){
       const y = ry + (i/18)*rh;
-      ctx.fillStyle = i%2===0 ? 'rgba(255,255,255,.03)' : 'rgba(255,255,255,.015)';
+      ctx.fillStyle = i%2===0 ? 'rgba(255,255,255,.030)' : 'rgba(255,255,255,.012)';
       ctx.fillRect(rx, y, rw, rh/18 + 1);
     }
 
+    // Boards highlight
+    ctx.strokeStyle = 'rgba(255,255,255,.10)';
+    ctx.lineWidth = 10;
+    roundedPath(rx+2, ry+2, rw-4, rh-4, 20);
+    ctx.stroke();
+
     // center line + circles
-    ctx.strokeStyle = 'rgba(255,59,92,.35)';
+    ctx.strokeStyle = 'rgba(255,59,92,.42)';
     ctx.lineWidth = 8;
     ctx.beginPath();
     ctx.moveTo(rx, ry + rh*0.5);
     ctx.lineTo(rx+rw, ry + rh*0.5);
     ctx.stroke();
 
-    ctx.strokeStyle = 'rgba(58,160,255,.25)';
+    // Faceoff circle
+    ctx.strokeStyle = 'rgba(58,160,255,.32)';
     ctx.lineWidth = 6;
     circle(W*0.5, ry + rh*0.58, rw*0.12);
     ctx.stroke();
 
     // Goal
     const g = goalMouth();
-    ctx.strokeStyle = 'rgba(255,255,255,.18)';
     ctx.lineWidth = 4;
-    roundRect(g.x, g.y, g.w, g.h, 12, 'rgba(0,0,0,0)', 'rgba(255,255,255,.18)');
+    roundRect(g.x, g.y, g.w, g.h, 12, 'rgba(255,255,255,.03)', 'rgba(255,255,255,.22)');
+
+    // Net (simple SVG-ish mesh)
+    ctx.save();
+    ctx.globalAlpha = 0.14;
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    for (let i=0;i<=8;i++){
+      const xx = g.x + (i/8)*g.w;
+      ctx.beginPath();
+      ctx.moveTo(xx, g.y);
+      ctx.lineTo(xx, g.y + g.h);
+      ctx.stroke();
+    }
+    for (let i=0;i<=4;i++){
+      const yy = g.y + (i/4)*g.h;
+      ctx.beginPath();
+      ctx.moveTo(g.x, yy);
+      ctx.lineTo(g.x + g.w, yy);
+      ctx.stroke();
+    }
+    ctx.restore();
 
     // Crease
-    ctx.strokeStyle = 'rgba(58,160,255,.25)';
+    ctx.strokeStyle = 'rgba(58,160,255,.28)';
     ctx.lineWidth = 6;
     ctx.beginPath();
     ctx.arc(W*0.5, g.y + g.h*0.85, g.w*0.24, Math.PI, 0);
@@ -409,25 +549,48 @@
 
     ctx.restore();
 
-    // Goalie
+    // Goalie (more graphic)
     const goalieRect = { x: goalie.x - goalie.w*0.5, y: goalie.y - goalie.h*0.5, w: goalie.w, h: goalie.h };
-    ctx.fillStyle = 'rgba(255,209,102,.85)';
-    ctx.strokeStyle = 'rgba(0,0,0,.25)';
-    ctx.lineWidth = 3;
-    roundRect(goalieRect.x, goalieRect.y, goalieRect.w, goalieRect.h, 18, ctx.fillStyle, ctx.strokeStyle);
+    const padGrad = ctx.createLinearGradient(goalieRect.x, goalieRect.y, goalieRect.x + goalieRect.w, goalieRect.y + goalieRect.h);
+    padGrad.addColorStop(0, 'rgba(255,209,102,.95)');
+    padGrad.addColorStop(1, 'rgba(255,154,89,.85)');
 
-    // Goalie mask
-    ctx.fillStyle = 'rgba(6,16,28,.45)';
-    circle(goalie.x, goalieRect.y + goalieRect.h*0.38, goalieRect.w*0.18);
+    roundRect(goalieRect.x, goalieRect.y, goalieRect.w, goalieRect.h, 18, padGrad, 'rgba(0,0,0,.30)');
+
+    // Stick
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,.55)';
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(goalie.x - goalieRect.w*0.12, goalieRect.y + goalieRect.h*0.65);
+    ctx.lineTo(goalie.x + goalieRect.w*0.28, goalieRect.y + goalieRect.h*0.80);
+    ctx.stroke();
+    ctx.restore();
+
+    // Mask
+    ctx.fillStyle = 'rgba(6,16,28,.55)';
+    circle(goalie.x, goalieRect.y + goalieRect.h*0.36, goalieRect.w*0.20);
     ctx.fill();
+    ctx.globalAlpha = 0.25;
+    ctx.fillStyle = 'rgba(255,255,255,.9)';
+    circle(goalie.x + goalieRect.w*0.06, goalieRect.y + goalieRect.h*0.31, goalieRect.w*0.05);
+    ctx.fill();
+    ctx.globalAlpha = 1;
 
-    // Puck
-    ctx.fillStyle = 'rgba(0,0,0,.75)';
+    // Puck (with highlight)
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,.82)';
     ctx.strokeStyle = 'rgba(255,255,255,.10)';
     ctx.lineWidth = 2;
     circle(puck.x, puck.y, puck.r);
     ctx.fill();
     ctx.stroke();
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = 'white';
+    circle(puck.x - puck.r*0.25, puck.y - puck.r*0.35, puck.r*0.38);
+    ctx.fill();
+    ctx.restore();
 
     // Aim guide
     if (!puck.active && aim.dragging){
@@ -588,8 +751,10 @@
   canvas.addEventListener('pointercancel', endDrag, {passive:false});
 
   // Buttons / keys
-  startBtn.addEventListener('click', start);
-  howBtn.addEventListener('click', () => {
+  startBtn.addEventListener('click', async () => { await unlockAudio(); sfx.ui(); start(); });
+  howBtn.addEventListener('click', async () => {
+    await unlockAudio();
+    sfx.ui();
     ovTitle.textContent = 'How to play';
     ovBody.textContent = 'Drag to aim. Release to shoot. Score goals past the goalie. Build streaks for bonus points.';
     ovHint.textContent = 'Tip: quick diagonal flicks are harder to read. Bank shots off the boards.';
@@ -601,7 +766,14 @@
       showOverlay('Puck Rob', 'Flick hockey shots past the goalie. Build streaks for bigger points.', 'Tip: bank shots off the boards. Goalie reads your release.', 'Start');
       return;
     }
+    sfx.ui();
     togglePause();
+  });
+
+  soundBtn.addEventListener('click', async () => {
+    await unlockAudio();
+    setSoundEnabled(!sound.enabled);
+    sfx.ui();
   });
 
   window.addEventListener('keydown', (e) => {
