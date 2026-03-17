@@ -517,13 +517,11 @@
     const b = rinkBounds();
     const g = goalMouth();
 
-    // Goalie AI
-    if (puck.active){
+    // Goalie AI (offense only). In defense, player controls goalie.
+    if (state.phase === 'offense' && puck.active){
       if (goalie.reactTimer > 0){
         goalie.reactTimer -= dt;
       } else {
-        // Fake handling: if shooter drags then pauses, goalie bites slightly toward the shown aim.
-        // We approximate by using a stored "shown" x (aimCurX) when puck just released.
         const follow = clamp(puck.x + puck.vx*0.08, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
         goalie.targetX = goalie.targetX*0.65 + follow*0.35;
       }
@@ -718,11 +716,15 @@
         hud();
       }
 
-      // Goal detection: puck crosses the goal line inside the posts.
-      // (Old logic required being "past goalie" which incorrectly denied post-side goals.)
-      const goalLineY = g.y + g.h*0.55;
+      // Goal detection:
+      // Offense (you shooting): puck crosses TOP goal line.
+      // Defense (them shooting): puck crosses BOTTOM goal line.
+      const topGoalLineY = g.y + g.h*0.55;
+      const bottomGoalLineY = (rink.y + rink.h) - g.h*0.55;
       const inMouth = (puck.x > g.x + puck.r && puck.x < g.x + g.w - puck.r);
-      const crossed = (puck.y - puck.r <= goalLineY);
+      const crossed = (state.phase === 'defense')
+        ? (puck.y + puck.r >= bottomGoalLineY)
+        : (puck.y - puck.r <= topGoalLineY);
 
       // If it's currently intersecting the goalie we already treated it as a save; don't double-score.
       const goalieRect2 = { x: goalie.x - goalie.w*0.5, y: goalie.y - goalie.h*0.5, w: goalie.w, h: goalie.h };
