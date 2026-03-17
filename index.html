@@ -58,6 +58,7 @@
       <div class="left">
         <div class="pill" id="scorePill">Score <small id="score">0</small></div>
         <div class="pill" id="streakPill">Streak <small id="streak">0</small></div>
+        <div class="pill" id="timePill">Time <small id="time">60</small></div>
       </div>
       <button class="btn" id="soundBtn" aria-label="Sound" title="Sound">Sound: Off</button>
       <button class="btn" id="pauseBtn" aria-label="Pause">Pause</button>
@@ -79,7 +80,7 @@
         <button class="btn" id="startBtn">Start</button>
         <button class="btn" id="howBtn">How to play</button>
       </div>
-      <p class="hint" id="ovHint" style="margin-top:10px;">Tip: bank shots off the boards. Goalie reads your release.</p>
+      <p class="hint" id="ovHint" style="margin-top:10px;">Tip: pass to a winger (strong sideways flick) for a one-timer. Pause briefly before release to fake.</p>
     </div>
   </div>
 
@@ -90,6 +91,7 @@
 
   const scoreEl = document.getElementById('score');
   const streakEl = document.getElementById('streak');
+  const timeEl = document.getElementById('time');
   const overlay = document.getElementById('overlay');
   const ovTitle = document.getElementById('ovTitle');
   const ovBody = document.getElementById('ovBody');
@@ -209,7 +211,7 @@
     pad: W*0.012,
     yTop: rink.y + rink.h*0.36,
     yBot: rink.y + rink.h*0.76,
-    speed: rink.h*0.22, // px/s
+    speed: rink.h*0.12, // px/s (slower)
     left: { x: rink.x + W*0.050, y: 0, dir: 1, flash: 0 },
     right:{ x: rink.x + rink.w - W*0.050, y: 0, dir: -1, flash: 0 },
   };
@@ -221,6 +223,9 @@
     streak: 0,
     best: 0,
     shots: 0,
+    // timed game
+    timeLeft: 60,
+    timeLimit: 60,
     lastT: 0,
     dt: 0,
     message: null,
@@ -297,6 +302,7 @@
     state.score = 0;
     state.streak = 0;
     state.shots = 0;
+    state.timeLeft = state.timeLimit;
     state.paused = false;
     pauseBtn.textContent = 'Pause';
     resetRound();
@@ -306,6 +312,7 @@
   function hud(){
     scoreEl.textContent = String(state.score);
     streakEl.textContent = String(state.streak);
+    timeEl.textContent = String(Math.max(0, Math.ceil(state.timeLeft)));
   }
 
   function showOverlay(title, body, hint, startLabel='Start'){
@@ -387,8 +394,28 @@
     state.shots++;
   }
 
+  function endGame(){
+    state.paused = true;
+    pauseBtn.textContent = 'Resume';
+    showOverlay(
+      'Time!',
+      `Final score: ${state.score} (best streak: ${state.best})`,
+      'Tap Start to run it back. Try mixing passes + fakes.',
+      'Restart'
+    );
+  }
+
   function update(dt){
     if (!state.running || state.paused) return;
+
+    // Timed game countdown
+    state.timeLeft -= dt;
+    if (state.timeLeft <= 0){
+      state.timeLeft = 0;
+      hud();
+      endGame();
+      return;
+    }
 
     // Message timer
     if (state.messageT > 0){
@@ -454,12 +481,20 @@
       const rightDist = near(wingers.right.x, wingers.right.y);
       const hitR = puck.r + wingers.r + wingers.pad;
 
-      if (puck.mode === 'pass' && puck.passTo === 'left' && leftDist < hitR){
+      // Make catching more forgiving + ensure it's actually a "pass" moving up ice.
+      const movingUp = puck.vy < -60;
+      const catchR = hitR * 1.35;
+
+      if (puck.mode === 'pass' && puck.passTo === 'left' && movingUp && leftDist < catchR){
         // One-timer shot toward net with a bit of cross-ice angle.
         wingers.left.flash = 0.18;
         puck.mode = 'shot';
         puck.passTo = null;
-        // Aim at net center but with a small random bias.
+
+        // Snap puck to the winger contact point so it feels like a touch.
+        puck.x = wingers.left.x + wingers.r*0.10;
+        puck.y = wingers.left.y;
+
         const g = goalMouth();
         const tx = W*0.5 + (Math.random()*2-1) * (g.w*0.12);
         const ty = g.y + g.h*0.45;
@@ -474,10 +509,14 @@
         goalie.targetX = clamp(tx, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
       }
 
-      if (puck.mode === 'pass' && puck.passTo === 'right' && rightDist < hitR){
+      if (puck.mode === 'pass' && puck.passTo === 'right' && movingUp && rightDist < catchR){
         wingers.right.flash = 0.18;
         puck.mode = 'shot';
         puck.passTo = null;
+
+        puck.x = wingers.right.x - wingers.r*0.10;
+        puck.y = wingers.right.y;
+
         const g = goalMouth();
         const tx = W*0.5 + (Math.random()*2-1) * (g.w*0.12);
         const ty = g.y + g.h*0.45;
@@ -923,8 +962,8 @@
     await unlockAudio();
     sfx.ui();
     ovTitle.textContent = 'How to play';
-    ovBody.textContent = 'Drag to aim. Release to shoot. Score goals past the goalie. Build streaks for bonus points.';
-    ovHint.textContent = 'Tip: quick diagonal flicks are harder to read. Bank shots off the boards.';
+    ovBody.textContent = 'Drag to aim. Release to shoot. Score goals past the goalie. Build streaks for bonus points. For a one-timer: flick strongly sideways to pass to a winger.';
+    ovHint.textContent = 'Tip: pause your finger briefly before release to fake the goalie.';
     startBtn.textContent = 'Play';
   });
 
