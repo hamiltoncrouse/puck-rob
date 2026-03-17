@@ -468,6 +468,7 @@
   }
 
   function switchToDefense(){
+    const offenseGoals = state.score;
     state.phase = 'defense';
     state.timeLeft = state.timeLimit;
     state.streak = 0;
@@ -476,7 +477,7 @@
     puck.x = W*0.5;
     puck.y = rink.y + rink.h*0.22;
     puck.active = false;
-    setMessage('DEFENSE!', 0.8);
+    setMessage(`DEFENSE TIME — you scored ${offenseGoals}.`, 1.6);
     hud();
   }
 
@@ -496,7 +497,16 @@
     if (!state.running || state.paused) return;
 
     // Timed phase countdown
+    const prevCeil = Math.ceil(state.timeLeft);
     state.timeLeft -= dt;
+    const nowCeil = Math.ceil(state.timeLeft);
+
+    // Last-10 countdown cue
+    if (nowCeil <= 10 && nowCeil >= 1 && nowCeil !== prevCeil){
+      setMessage(String(nowCeil), 0.40);
+      sfx.ui();
+    }
+
     if (state.timeLeft <= 0){
       state.timeLeft = 0;
       hud();
