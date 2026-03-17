@@ -203,6 +203,17 @@
   const rink = { x: W*0.08, y: H*0.08, w: W*0.84, h: H*0.84 };
   const goal = { w: rink.w*0.52, h: rink.h*0.06 };
 
+  // Wingers (teammates) on the boards for one-timers.
+  const wingers = {
+    r: W*0.030,
+    pad: W*0.012,
+    yTop: rink.y + rink.h*0.36,
+    yBot: rink.y + rink.h*0.76,
+    speed: rink.h*0.22, // px/s
+    left: { x: rink.x + W*0.050, y: 0, dir: 1, flash: 0 },
+    right:{ x: rink.x + rink.w - W*0.050, y: 0, dir: -1, flash: 0 },
+  };
+
   const state = {
     running: false,
     paused: false,
@@ -224,6 +235,9 @@
     vy: 0,
     active: false,
     spin: 0,
+    // pass / one-timer
+    mode: 'shot', // 'shot'|'pass'
+    passTo: null, // 'left'|'right'|null
   };
 
   const goalie = {
@@ -245,6 +259,9 @@
     curX: 0,
     curY: 0,
     pointerId: null,
+    // Fake: hold briefly before release to add deception.
+    holdTime: 0,
+    lastMoveT: 0,
   };
 
   function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
@@ -261,6 +278,14 @@
     goalie.vx = 0;
     goalie.reactTimer = 0;
     goalie.targetX = W*0.5;
+
+    // wingers
+    wingers.left.y  = rink.y + rink.h*0.62;
+    wingers.right.y = rink.y + rink.h*0.62;
+    wingers.left.dir = 1;
+    wingers.right.dir = -1;
+    wingers.left.flash = 0;
+    wingers.right.flash = 0;
 
     aim.dragging = false;
     aim.pointerId = null;
@@ -334,8 +359,16 @@
       return;
     }
 
+    // Decide: shot vs pass.
+    // If player flicks strongly sideways (toward boards) and not super upward, treat as pass.
+    const sideBias = Math.abs(dirX) - Math.abs(dirY);
+    const wantsPass = (Math.abs(dirX) > 0.55 && dirY < -0.20 && sideBias > 0.08);
+
+    puck.mode = wantsPass ? 'pass' : 'shot';
+    puck.passTo = wantsPass ? (dirX < 0 ? 'left' : 'right') : null;
+
     // Speed tuning.
-    const base = rink.h * 1.35; // px/s
+    const base = rink.h * (puck.mode === 'pass' ? 1.05 : 1.35); // px/s
     const v = base * (power / (W*0.6));
 
     puck.vx = dirX * v;
@@ -344,8 +377,8 @@
 
     sfx.shoot(power / (W*0.6));
 
-    // Add a little spin based on lateral component.
-    puck.spin = clamp(dirX * 1.4, -1.2, 1.2);
+    // Add a little spin based on lateral component (less on passes)
+    puck.spin = clamp(dirX * (puck.mode === 'pass' ? 0.7 : 1.4), -1.2, 1.2);
 
     // Goalie chooses a read a moment after release.
     goalie.reactTimer = goalie.react;
@@ -371,9 +404,9 @@
       if (goalie.reactTimer > 0){
         goalie.reactTimer -= dt;
       } else {
-        // Track puck but with lag and limits.
+        // Fake handling: if shooter drags then pauses, goalie bites slightly toward the shown aim.
+        // We approximate by using a stored "shown" x (aimCurX) when puck just released.
         const follow = clamp(puck.x + puck.vx*0.08, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
-        // Blend with initial guess to feel "read"-y.
         goalie.targetX = goalie.targetX*0.65 + follow*0.35;
       }
 
@@ -382,6 +415,16 @@
       goalie.x += clamp(dx, -maxMove, maxMove);
       goalie.x = clamp(goalie.x, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
     }
+
+    // Winger movement (short up/down patterns)
+    const moveWinger = (w) => {
+      w.y += w.dir * wingers.speed * dt;
+      if (w.y < wingers.yTop){ w.y = wingers.yTop; w.dir = 1; }
+      if (w.y > wingers.yBot){ w.y = wingers.yBot; w.dir = -1; }
+      if (w.flash > 0) w.flash = Math.max(0, w.flash - dt);
+    };
+    moveWinger(wingers.left);
+    moveWinger(wingers.right);
 
     // Puck physics
     if (puck.active){
@@ -395,18 +438,58 @@
       puck.vx *= Math.pow(0.992, dt*60);
       puck.vy *= Math.pow(0.995, dt*60);
 
-      // Side boards bounce
+      // Side boards: no bounce (use wingers instead). Clamp + damp.
       if (puck.x - puck.r < b.left){
         puck.x = b.left + puck.r;
-        puck.vx *= -0.92;
-        puck.spin *= -0.8;
-        sfx.board();
+        puck.vx *= 0.25;
       }
       if (puck.x + puck.r > b.right){
         puck.x = b.right - puck.r;
-        puck.vx *= -0.92;
-        puck.spin *= -0.8;
-        sfx.board();
+        puck.vx *= 0.25;
+      }
+
+      // Winger one-timer: if puck comes close to a winger while passing, they fire instantly.
+      const near = (wx, wy) => Math.hypot(puck.x - wx, puck.y - wy);
+      const leftDist = near(wingers.left.x, wingers.left.y);
+      const rightDist = near(wingers.right.x, wingers.right.y);
+      const hitR = puck.r + wingers.r + wingers.pad;
+
+      if (puck.mode === 'pass' && puck.passTo === 'left' && leftDist < hitR){
+        // One-timer shot toward net with a bit of cross-ice angle.
+        wingers.left.flash = 0.18;
+        puck.mode = 'shot';
+        puck.passTo = null;
+        // Aim at net center but with a small random bias.
+        const g = goalMouth();
+        const tx = W*0.5 + (Math.random()*2-1) * (g.w*0.12);
+        const ty = g.y + g.h*0.45;
+        const ang = Math.atan2(ty - puck.y, tx - puck.x);
+        const speed = rink.h * 1.55;
+        puck.vx = Math.cos(ang) * speed;
+        puck.vy = Math.sin(ang) * speed;
+        puck.spin = clamp((tx - W*0.5) / (g.w*0.5), -1, 1);
+        sfx.ui();
+        setMessage('One-timer!', 0.7);
+        goalie.reactTimer = goalie.react * 0.8;
+        goalie.targetX = clamp(tx, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
+      }
+
+      if (puck.mode === 'pass' && puck.passTo === 'right' && rightDist < hitR){
+        wingers.right.flash = 0.18;
+        puck.mode = 'shot';
+        puck.passTo = null;
+        const g = goalMouth();
+        const tx = W*0.5 + (Math.random()*2-1) * (g.w*0.12);
+        const ty = g.y + g.h*0.45;
+        const ang = Math.atan2(ty - puck.y, tx - puck.x);
+        const speed = rink.h * 1.55;
+        puck.vx = Math.cos(ang) * speed;
+        puck.vy = Math.sin(ang) * speed;
+        puck.spin = clamp((tx - W*0.5) / (g.w*0.5), -1, 1);
+        sfx.ui();
+        setMessage('One-timer!', 0.7);
+        goalie.reactTimer = goalie.react * 0.8;
+        goalie.targetX = clamp(tx, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
       }
 
       // Top boards (behind net) bounce
@@ -592,6 +675,10 @@
     ctx.fill();
     ctx.restore();
 
+    // Wingers
+    drawWinger(wingers.left);
+    drawWinger(wingers.right);
+
     // Aim guide
     if (!puck.active && aim.dragging){
       const dx = aim.curX - aim.startX;
@@ -599,9 +686,16 @@
       const mag = Math.hypot(dx, dy);
       const strength = clamp(mag / (W*0.6), 0, 1);
 
+      // Pass vs shot hint
+      const dirX = dx/(mag||1);
+      const dirY = dy/(mag||1);
+      const wantsPass = (Math.abs(dirX) > 0.55 && dirY < -0.20 && (Math.abs(dirX)-Math.abs(dirY)) > 0.08);
+
       ctx.save();
       ctx.globalAlpha = 0.9;
-      ctx.strokeStyle = `rgba(58,160,255,${0.15 + strength*0.55})`;
+      ctx.strokeStyle = wantsPass
+        ? `rgba(49,209,122,${0.18 + strength*0.60})`
+        : `rgba(58,160,255,${0.15 + strength*0.55})`;
       ctx.lineWidth = 10;
       ctx.lineCap = 'round';
       ctx.beginPath();
@@ -619,6 +713,16 @@
       ctx.moveTo(aim.curX, aim.curY);
       ctx.lineTo(aim.curX - ah*Math.cos(ang + 0.45), aim.curY - ah*Math.sin(ang + 0.45));
       ctx.stroke();
+
+      // Fake indicator: if finger has been still recently, show a subtle pulse
+      const heldMs = performance.now() - aim.lastMoveT;
+      if (heldMs > 120){
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = 'rgba(255,209,102,.9)';
+        circle(aim.curX, aim.curY, 16 + 10*Math.min(1, (heldMs-120)/250));
+        ctx.fill();
+      }
+
       ctx.restore();
     }
 
@@ -661,6 +765,46 @@
   function circle(x,y,r){
     ctx.beginPath();
     ctx.arc(x,y,r,0,Math.PI*2);
+  }
+
+  function drawWinger(w){
+    // Simple SVG-ish teammate: jersey circle + stick.
+    ctx.save();
+    const r = wingers.r;
+    const base = ctx.createRadialGradient(w.x - r*0.3, w.y - r*0.4, r*0.2, w.x, w.y, r);
+    base.addColorStop(0, 'rgba(233,243,255,.95)');
+    base.addColorStop(1, 'rgba(58,160,255,.55)');
+
+    circle(w.x, w.y, r);
+    ctx.fillStyle = base;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,.25)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Helmet dot
+    ctx.fillStyle = 'rgba(6,16,28,.45)';
+    circle(w.x, w.y - r*0.25, r*0.22);
+    ctx.fill();
+
+    // Stick
+    ctx.strokeStyle = 'rgba(255,255,255,.55)';
+    ctx.lineWidth = 7;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(w.x - r*0.15, w.y + r*0.35);
+    ctx.lineTo(w.x + r*1.05, w.y + r*0.70);
+    ctx.stroke();
+
+    // Flash on one-timer
+    if (w.flash > 0){
+      ctx.globalAlpha = 0.45 * (w.flash/0.18);
+      ctx.fillStyle = 'rgba(49,209,122,.9)';
+      circle(w.x, w.y, r*1.55);
+      ctx.fill();
+    }
+
+    ctx.restore();
   }
 
   function roundedPath(x,y,w,h,r){
@@ -721,6 +865,8 @@
     canvas.setPointerCapture(ev.pointerId);
     aim.pointerId = ev.pointerId;
     aim.dragging = true;
+    aim.holdTime = 0;
+    aim.lastMoveT = performance.now();
 
     const p = canvasPointFromEvent(ev);
     aim.startX = puck.x;
@@ -735,15 +881,36 @@
     const p = canvasPointFromEvent(ev);
     // Clamp aim within rink
     const b = rinkBounds();
-    aim.curX = clamp(p.x, b.left, b.right);
-    aim.curY = clamp(p.y, b.top, b.bottom);
+    const nx = clamp(p.x, b.left, b.right);
+    const ny = clamp(p.y, b.top, b.bottom);
+
+    const moved = Math.hypot(nx - aim.curX, ny - aim.curY) > W*0.004;
+    if (moved) aim.lastMoveT = performance.now();
+
+    aim.curX = nx;
+    aim.curY = ny;
   }, {passive:false});
 
   function endDrag(ev){
     if (!aim.dragging || ev.pointerId !== aim.pointerId) return;
     ev.preventDefault();
+
+    // Fake mechanic: if you pause your finger briefly before release, goalie "bites" a bit.
+    const heldMs = performance.now() - aim.lastMoveT;
+    const didFake = heldMs > 140;
+
     aim.dragging = false;
     aim.pointerId = null;
+
+    if (didFake){
+      const g = goalMouth();
+      const shown = clamp(aim.curX, g.x, g.x + g.w);
+      goalie.reactTimer = Math.max(0.01, goalie.reactTimer);
+      goalie.targetX = goalie.targetX*0.55 + shown*0.45;
+      setMessage('Fake!', 0.45);
+      sfx.ui();
+    }
+
     shootFromAim();
   }
 
