@@ -863,38 +863,77 @@
     circle(W*0.5, ry + rh*0.58, rw*0.12);
     ctx.stroke();
 
-    // Goal
-    const g = goalMouth();
-    ctx.lineWidth = 4;
-    roundRect(g.x, g.y, g.w, g.h, 12, 'rgba(255,255,255,.03)', 'rgba(255,255,255,.22)');
+    function drawGoal(which){
+      const g = goalMouth(which);
+      const active = (state.phase === 'offense' && which === 'top') || (state.phase === 'defense' && which === 'bottom');
 
-    // Net (simple SVG-ish mesh)
-    ctx.save();
-    ctx.globalAlpha = 0.14;
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 2;
-    for (let i=0;i<=8;i++){
-      const xx = g.x + (i/8)*g.w;
-      ctx.beginPath();
-      ctx.moveTo(xx, g.y);
-      ctx.lineTo(xx, g.y + g.h);
-      ctx.stroke();
-    }
-    for (let i=0;i<=4;i++){
-      const yy = g.y + (i/4)*g.h;
-      ctx.beginPath();
-      ctx.moveTo(g.x, yy);
-      ctx.lineTo(g.x + g.w, yy);
-      ctx.stroke();
-    }
-    ctx.restore();
+      // Frame
+      ctx.lineWidth = 4;
+      roundRect(
+        g.x, g.y, g.w, g.h, 12,
+        active ? 'rgba(255,255,255,.05)' : 'rgba(255,255,255,.02)',
+        active ? 'rgba(255,255,255,.30)' : 'rgba(255,255,255,.16)'
+      );
 
-    // Crease
-    ctx.strokeStyle = 'rgba(58,160,255,.28)';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.arc(W*0.5, g.y + g.h*0.85, g.w*0.24, Math.PI, 0);
-    ctx.stroke();
+      // Net mesh
+      ctx.save();
+      ctx.globalAlpha = active ? 0.22 : 0.10;
+      ctx.strokeStyle = 'white';
+      ctx.lineWidth = 2;
+      for (let i=0;i<=8;i++){
+        const xx = g.x + (i/8)*g.w;
+        ctx.beginPath();
+        ctx.moveTo(xx, g.y);
+        ctx.lineTo(xx, g.y + g.h);
+        ctx.stroke();
+      }
+      for (let i=0;i<=4;i++){
+        const yy = g.y + (i/4)*g.h;
+        ctx.beginPath();
+        ctx.moveTo(g.x, yy);
+        ctx.lineTo(g.x + g.w, yy);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Crease
+      ctx.save();
+      ctx.strokeStyle = active ? 'rgba(49,209,122,.30)' : 'rgba(58,160,255,.18)';
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      if (which === 'top'){
+        ctx.arc(W*0.5, g.y + g.h*0.85, g.w*0.24, Math.PI, 0);
+      } else {
+        ctx.arc(W*0.5, g.y + g.h*0.15, g.w*0.24, 0, Math.PI);
+      }
+      ctx.stroke();
+
+      // Active glow
+      if (active){
+        ctx.globalAlpha = 0.14;
+        ctx.fillStyle = 'rgba(49,209,122,.85)';
+        roundRect(g.x - 6, g.y - 6, g.w + 12, g.h + 12, 14, ctx.fillStyle, null);
+      }
+      ctx.restore();
+
+      // Label
+      ctx.save();
+      ctx.globalAlpha = active ? 0.85 : 0.35;
+      ctx.fillStyle = 'rgba(233,243,255,.92)';
+      ctx.font = '900 18px system-ui';
+      ctx.textAlign = 'center';
+      const label = active ? (state.phase === 'offense' ? 'ATTACK' : 'DEFEND') : '';
+      if (label){
+        ctx.fillText(label, W*0.5, which === 'top' ? (g.y - 10) : (g.y + g.h + 26));
+      }
+      ctx.restore();
+
+      return g;
+    }
+
+    // Goals (both visible)
+    drawGoal('top');
+    drawGoal('bottom');
 
     ctx.restore();
 
