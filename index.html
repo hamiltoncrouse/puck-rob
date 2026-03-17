@@ -369,7 +369,8 @@
     // Decide: shot vs pass.
     // If player flicks strongly sideways (toward boards) and not super upward, treat as pass.
     const sideBias = Math.abs(dirX) - Math.abs(dirY);
-    const wantsPass = (Math.abs(dirX) > 0.55 && dirY < -0.20 && sideBias > 0.08);
+    // Easier diagonal passing: allow more upward component.
+    const wantsPass = (Math.abs(dirX) > 0.42 && dirY < -0.12 && sideBias > -0.18);
 
     puck.mode = wantsPass ? 'pass' : 'shot';
     puck.passTo = wantsPass ? (dirX < 0 ? 'left' : 'right') : null;
@@ -482,10 +483,12 @@
       const hitR = puck.r + wingers.r + wingers.pad;
 
       // Make catching more forgiving + ensure it's actually a "pass" moving up ice.
-      const movingUp = puck.vy < -60;
-      const catchR = hitR * 1.35;
+      // Diagonal passes can be slower in Y, so allow a gentler threshold.
+      const movingUp = puck.vy < -25;
+      const catchR = hitR * 1.60;
 
       if (puck.mode === 'pass' && puck.passTo === 'left' && movingUp && leftDist < catchR){
+        console.log('one-timer left');
         // One-timer shot toward net with a bit of cross-ice angle.
         wingers.left.flash = 0.18;
         puck.mode = 'shot';
@@ -510,6 +513,7 @@
       }
 
       if (puck.mode === 'pass' && puck.passTo === 'right' && movingUp && rightDist < catchR){
+        console.log('one-timer right');
         wingers.right.flash = 0.18;
         puck.mode = 'shot';
         puck.passTo = null;
@@ -728,7 +732,7 @@
       // Pass vs shot hint
       const dirX = dx/(mag||1);
       const dirY = dy/(mag||1);
-      const wantsPass = (Math.abs(dirX) > 0.55 && dirY < -0.20 && (Math.abs(dirX)-Math.abs(dirY)) > 0.08);
+      const wantsPass = (Math.abs(dirX) > 0.42 && dirY < -0.12 && (Math.abs(dirX)-Math.abs(dirY)) > -0.18);
 
       ctx.save();
       ctx.globalAlpha = 0.9;
