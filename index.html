@@ -243,6 +243,8 @@
     // pass / one-timer
     mode: 'shot', // 'shot'|'pass'
     passTo: null, // 'left'|'right'|null
+    didFake: false,
+    lastPassSpeed: 0,
   };
 
   const goalie = {
@@ -331,6 +333,42 @@
     state.messageT = seconds;
   }
 
+  // --- Chance model ---
+  function lerp(a,b,t){ return a + (b-a)*t; }
+  function norm(v, a, b){
+    if (a === b) return 0;
+    return clamp((v - a) / (b - a), 0, 1);
+  }
+
+  function oneTimerChance({passSpeed, wingerY, passDist}){
+    // q in [0..1]
+    const posQ = 1 - norm(wingerY, wingers.yTop, wingers.yBot); // top is best
+    const speedQ = norm(passSpeed, rink.h*0.55, rink.h*1.25);
+    const accQ = 1 - norm(passDist, 0, (puck.r + wingers.r + wingers.pad) * 1.6);
+    const q = clamp(0.45*posQ + 0.40*speedQ + 0.15*accQ, 0, 1);
+    const p = lerp(1/7, 1/3, q);
+    return { q, p };
+  }
+
+  function shotChance({shotSpeed, puckXAtLine, didFake}){
+    const speedQ = norm(shotSpeed, rink.h*0.75, rink.h*1.85);
+    const g = goalMouth();
+    const center = g.x + g.w*0.5;
+    const cornerQ = norm(Math.abs(puckXAtLine - center), 0, g.w*0.5);
+    const fakeQ = didFake ? 1 : 0;
+    const q = clamp(0.40*speedQ + 0.45*cornerQ + 0.15*fakeQ, 0, 1);
+    // User chose A: cap normal shots around ~25-30%.
+    const p = lerp(1/12, 0.30, q);
+    return { q, p };
+  }
+
+  function qualityLabel(q){
+    if (q >= 0.80) return 'PERFECT';
+    if (q >= 0.55) return 'GOOD';
+    if (q >= 0.35) return 'OK';
+    return 'WEAK';
+  }
+
   function rinkBounds(){
     return {
       left: rink.x,
@@ -346,7 +384,7 @@
     return { x: gx, y: gy, w: goal.w, h: goal.h };
   }
 
-  function shootFromAim(){
+  function shootFromAim(didFake=false){
     // Convert drag vector into velocity.
     const dx = aim.curX - aim.startX;
     const dy = aim.curY - aim.startY;
@@ -375,6 +413,7 @@
 
     puck.mode = wantsPass ? 'pass' : 'shot';
     puck.passTo = wantsPass ? (dirX < 0 ? 'left' : 'right') : null;
+    puck.didFake = didFake;
 
     // Speed tuning.
     const base = rink.h * (puck.mode === 'pass' ? 1.05 : 1.35); // px/s
@@ -383,6 +422,8 @@
     puck.vx = dirX * v;
     puck.vy = dirY * v;
     puck.active = true;
+
+    puck.lastPassSpeed = (puck.mode === 'pass') ? Math.hypot(puck.vx, puck.vy) : 0;
 
     sfx.shoot(power / (W*0.6));
 
@@ -489,49 +530,78 @@
       const catchR = hitR * 1.60;
 
       if (puck.mode === 'pass' && puck.passTo === 'left' && movingUp && leftDist < catchR){
-        console.log('one-timer left');
-        // One-timer shot toward net with a bit of cross-ice angle.
+        // Chance model for one-timer.
+        const ch = oneTimerChance({ passSpeed: puck.lastPassSpeed, wingerY: wingers.left.y, passDist: leftDist });
+        setMessage(`One-timer — ${qualityLabel(ch.q)} (${Math.round(ch.p*100)}%)`, 0.75);
+
         wingers.left.flash = 0.18;
         puck.mode = 'shot';
         puck.passTo = null;
 
-        // Snap puck to the winger contact point so it feels like a touch.
+        // If it "scores" via chance, we basically snap it in (instant goal feel).
+        if (Math.random() < ch.p){
+          const points = 1 + Math.floor(state.streak/3);
+          state.score += points;
+          state.streak += 1;
+          state.best = Math.max(state.best, state.streak);
+          hud();
+          setMessage(`ONE-TIMER GOAL! +${points}`, 0.9);
+          sfx.goal();
+          puck.active = false;
+          setTimeout(() => resetRound(), 420);
+          return;
+        }
+
+        // Otherwise, it becomes a shot that gets saved/missed (keep it moving toward net).
         puck.x = wingers.left.x + wingers.r*0.10;
         puck.y = wingers.left.y;
 
         const g = goalMouth();
-        const tx = W*0.5 + (Math.random()*2-1) * (g.w*0.12);
+        const tx = W*0.5 + (Math.random()*2-1) * (g.w*0.10);
         const ty = g.y + g.h*0.45;
         const ang = Math.atan2(ty - puck.y, tx - puck.x);
-        const speed = rink.h * 1.55;
+        const speed = rink.h * 1.45;
         puck.vx = Math.cos(ang) * speed;
         puck.vy = Math.sin(ang) * speed;
         puck.spin = clamp((tx - W*0.5) / (g.w*0.5), -1, 1);
         sfx.ui();
-        setMessage('One-timer!', 0.7);
         goalie.reactTimer = goalie.react * 0.8;
         goalie.targetX = clamp(tx, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
       }
 
       if (puck.mode === 'pass' && puck.passTo === 'right' && movingUp && rightDist < catchR){
-        console.log('one-timer right');
+        const ch = oneTimerChance({ passSpeed: puck.lastPassSpeed, wingerY: wingers.right.y, passDist: rightDist });
+        setMessage(`One-timer — ${qualityLabel(ch.q)} (${Math.round(ch.p*100)}%)`, 0.75);
+
         wingers.right.flash = 0.18;
         puck.mode = 'shot';
         puck.passTo = null;
+
+        if (Math.random() < ch.p){
+          const points = 1 + Math.floor(state.streak/3);
+          state.score += points;
+          state.streak += 1;
+          state.best = Math.max(state.best, state.streak);
+          hud();
+          setMessage(`ONE-TIMER GOAL! +${points}`, 0.9);
+          sfx.goal();
+          puck.active = false;
+          setTimeout(() => resetRound(), 420);
+          return;
+        }
 
         puck.x = wingers.right.x - wingers.r*0.10;
         puck.y = wingers.right.y;
 
         const g = goalMouth();
-        const tx = W*0.5 + (Math.random()*2-1) * (g.w*0.12);
+        const tx = W*0.5 + (Math.random()*2-1) * (g.w*0.10);
         const ty = g.y + g.h*0.45;
         const ang = Math.atan2(ty - puck.y, tx - puck.x);
-        const speed = rink.h * 1.55;
+        const speed = rink.h * 1.45;
         puck.vx = Math.cos(ang) * speed;
         puck.vy = Math.sin(ang) * speed;
         puck.spin = clamp((tx - W*0.5) / (g.w*0.5), -1, 1);
         sfx.ui();
-        setMessage('One-timer!', 0.7);
         goalie.reactTimer = goalie.react * 0.8;
         goalie.targetX = clamp(tx, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
       }
@@ -577,19 +647,32 @@
       );
 
       if (inMouth && crossed && !touchingGoalie){
-        // Score!
-        const points = 1 + Math.floor(state.streak/3);
-        state.score += points;
-        state.streak += 1;
-        state.best = Math.max(state.best, state.streak);
-        hud();
+        // Chance-based scoring for normal shots.
+        const shotSpeed = Math.hypot(puck.vx, puck.vy);
+        const ch = shotChance({ shotSpeed, puckXAtLine: puck.x, didFake: !!puck.didFake });
 
-        setMessage(points > 1 ? `GOAL! +${points}` : 'GOAL!');
-        sfx.goal();
+        // Convert the geometric "would be in" shot into a probability.
+        // If it doesn't go in, treat it as a save.
+        if (Math.random() < ch.p){
+          const points = 1 + Math.floor(state.streak/3);
+          state.score += points;
+          state.streak += 1;
+          state.best = Math.max(state.best, state.streak);
+          hud();
 
-        // New round after a short delay
-        puck.active = false;
-        setTimeout(() => resetRound(), 420);
+          setMessage(`${qualityLabel(ch.q)} SHOT GOAL! +${points} (${Math.round(ch.p*100)}%)`, 0.9);
+          sfx.goal();
+
+          puck.active = false;
+          setTimeout(() => resetRound(), 420);
+        } else {
+          setMessage(`Saved — ${qualityLabel(ch.q)} (${Math.round(ch.p*100)}%)`, 0.8);
+          sfx.save();
+          state.streak = 0;
+          hud();
+          puck.active = false;
+          setTimeout(() => resetRound(), 360);
+        }
       }
 
       // If puck falls back to bottom => round ends (miss)
@@ -964,7 +1047,7 @@
       sfx.ui();
     }
 
-    shootFromAim();
+    shootFromAim(didFake);
   }
 
   canvas.addEventListener('pointerup', endDrag, {passive:false});
