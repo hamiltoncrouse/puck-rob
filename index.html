@@ -356,8 +356,9 @@
     const posQ = 1 - norm(wingerY, wingers.yTop, wingers.yBot); // top is best
     const speedQ = norm(passSpeed, rink.h*0.55, rink.h*1.25);
     const accQ = 1 - norm(passDist, 0, (puck.r + wingers.r + wingers.pad) * 1.6);
-    const q = clamp(0.45*posQ + 0.40*speedQ + 0.15*accQ, 0, 1);
-    const p = lerp(1/7, 1/3, q);
+    // Make one-timers feel rewarding: slightly favor speed/position and widen the range upward.
+    const q = clamp(0.42*posQ + 0.48*speedQ + 0.10*accQ, 0, 1);
+    const p = lerp(1/6.5, 0.36, q);
     return { q, p };
   }
 
@@ -368,8 +369,9 @@
     const cornerQ = norm(Math.abs(puckXAtLine - center), 0, g.w*0.5);
     const fakeQ = didFake ? 1 : 0;
     const q = clamp(0.40*speedQ + 0.45*cornerQ + 0.15*fakeQ, 0, 1);
-    // User chose A: cap normal shots around ~25-30%.
-    const p = lerp(1/12, 0.30, q);
+    // User chose A: cap normal shots around ~25-30%, but make straight shots harder.
+    // Reduce max and raise the floor slightly so weak shots don't randomly sneak in.
+    const p = lerp(1/14, 0.24, q);
     return { q, p };
   }
 
