@@ -561,13 +561,22 @@
         hud();
       }
 
-      // Goal detection: puck crosses goal line within mouth, above goalie zone.
+      // Goal detection: puck crosses the goal line inside the posts.
+      // (Old logic required being "past goalie" which incorrectly denied post-side goals.)
       const goalLineY = g.y + g.h*0.55;
       const inMouth = (puck.x > g.x + puck.r && puck.x < g.x + g.w - puck.r);
       const crossed = (puck.y - puck.r <= goalLineY);
-      const pastGoalie = (puck.y + puck.r < goalie.y - goalie.h*0.4);
 
-      if (inMouth && crossed && pastGoalie){
+      // If it's currently intersecting the goalie we already treated it as a save; don't double-score.
+      const goalieRect2 = { x: goalie.x - goalie.w*0.5, y: goalie.y - goalie.h*0.5, w: goalie.w, h: goalie.h };
+      const touchingGoalie = (
+        puck.x + puck.r > goalieRect2.x &&
+        puck.x - puck.r < goalieRect2.x + goalieRect2.w &&
+        puck.y + puck.r > goalieRect2.y &&
+        puck.y - puck.r < goalieRect2.y + goalieRect2.h
+      );
+
+      if (inMouth && crossed && !touchingGoalie){
         // Score!
         const points = 1 + Math.floor(state.streak/3);
         state.score += points;
