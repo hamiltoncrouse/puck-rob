@@ -24,12 +24,12 @@
 
     .wrap{width:min(560px, 100vw); padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); box-sizing:border-box;}
 
-    .hud{display:flex; gap:10px; align-items:center; justify-content:space-between; margin: 0 0 10px;}
-    .hud .left{display:flex; gap:10px; align-items:center;}
-    .pill{background: rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.10); box-shadow: 0 10px 30px var(--shadow); border-radius: 999px; padding: 8px 12px; font-weight: 700; letter-spacing:.2px;}
-    .pill small{display:block; font-weight:600; color:var(--muted); letter-spacing:.3px;}
+    .hud{display:flex; gap:10px; align-items:center; justify-content:space-between; margin: 0 0 10px; flex-wrap:wrap;}
+    .hud .left,.hud .right{display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
+    .pill{background: rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.10); box-shadow: 0 10px 30px var(--shadow); border-radius: 999px; padding: 7px 10px; font-weight: 800; letter-spacing:.2px; font-size: 13px;}
+    .pill small{display:block; font-weight:700; color:var(--muted); letter-spacing:.3px; font-size: 12px;}
 
-    .btn{appearance:none; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.08); color:var(--text); border-radius: 12px; padding: 10px 12px; font-weight: 800; box-shadow: 0 10px 30px var(--shadow);}
+    .btn{appearance:none; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.08); color:var(--text); border-radius: 12px; padding: 9px 10px; font-weight: 900; box-shadow: 0 10px 30px var(--shadow); font-size: 13px;}
     .btn:active{transform: translateY(1px);}
 
     canvas{width:100%; height:auto; aspect-ratio: 9/16; border-radius: 18px; border:1px solid rgba(255,255,255,.12);
@@ -40,6 +40,15 @@
 
     .footer{margin-top:10px; color:var(--muted); font-size: 12px; line-height:1.35; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;}
     .footer b{color:var(--text)}
+
+    /* Small phones: prevent HUD/footer clipping */
+    @media (max-width: 380px), (max-height: 720px){
+      .wrap{padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));}
+      .footer{font-size: 11px; margin-top:8px;}
+      .btn{padding: 8px 9px; font-size: 12px;}
+      .pill{padding: 6px 9px; font-size: 12px;}
+      .pill small{font-size: 11px;}
+    }
 
     .overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding: 18px; background: rgba(0,0,0,.55); backdrop-filter: blur(6px);}
     .card{width:min(520px, 100%); border-radius: 18px; border:1px solid rgba(255,255,255,.12); background: rgba(10,18,28,.92); box-shadow: 0 18px 60px rgba(0,0,0,.6); padding: 16px;}
@@ -60,15 +69,17 @@
         <div class="pill" id="streakPill">Streak <small id="streak">0</small></div>
         <div class="pill" id="timePill">Time <small id="time">60</small></div>
       </div>
-      <button class="btn" id="soundBtn" aria-label="Sound" title="Sound">Sound: Off</button>
-      <button class="btn" id="pauseBtn" aria-label="Pause">Pause</button>
+      <div class="right">
+        <button class="btn" id="soundBtn" aria-label="Sound" title="Sound">Sound: Off</button>
+        <button class="btn" id="pauseBtn" aria-label="Pause">Pause</button>
+      </div>
     </div>
 
     <canvas id="c" width="720" height="1280" aria-label="Puck Rob game canvas"></canvas>
 
     <div class="footer">
-      <div><b>How to play:</b> swipe / drag to aim, release to shoot.</div>
-      <div><span class="kbd">R</span> restart • <span class="kbd">P</span> pause</div>
+      <div><b>How to play:</b> drag to aim, release to shoot. Strong sideways flick = pass to winger (one-timer).</div>
+      <div><span class="kbd">R</span> restart • <span class="kbd">P</span> pause • hold briefly to fake</div>
     </div>
   </div>
 
@@ -666,8 +677,14 @@
           puck.active = false;
           setTimeout(() => resetRound(), 420);
         } else {
-          setMessage(`Saved — ${qualityLabel(ch.q)} (${Math.round(ch.p*100)}%)`, 0.8);
-          sfx.save();
+          // Miss vs Save split.
+          // Low quality shots miss more often; higher quality shots get saved more often.
+          const missChance = clamp(lerp(0.55, 0.15, ch.q), 0.10, 0.70);
+          const missed = Math.random() < missChance;
+
+          setMessage(`${missed ? 'Miss' : 'Saved'} — ${qualityLabel(ch.q)} (${Math.round(ch.p*100)}%)`, 0.85);
+          if (missed) sfx.board(); else sfx.save();
+
           state.streak = 0;
           hud();
           puck.active = false;
