@@ -65,9 +65,11 @@
   <div class="wrap">
     <div class="hud">
       <div class="left">
-        <div class="pill" id="scorePill">Score <small id="score">0</small></div>
+        <div class="pill" id="scorePill">You <small id="score">0</small></div>
+        <div class="pill" id="oppPill">Them <small id="opp">0</small></div>
         <div class="pill" id="streakPill">Streak <small id="streak">0</small></div>
         <div class="pill" id="timePill">Time <small id="time">60</small></div>
+        <div class="pill" id="phasePill">Phase <small id="phase">Offense</small></div>
       </div>
       <div class="right">
         <button class="btn" id="soundBtn" aria-label="Sound" title="Sound">Sound: Off</button>
@@ -78,8 +80,8 @@
     <canvas id="c" width="720" height="1280" aria-label="Puck Rob game canvas"></canvas>
 
     <div class="footer">
-      <div><b>How to play:</b> drag to aim, release to shoot. Strong sideways flick = pass to winger (one-timer).</div>
-      <div><span class="kbd">R</span> restart • <span class="kbd">P</span> pause • hold briefly to fake</div>
+      <div><b>How to play:</b> 60s OFFENSE (shoot / pass). 60s DEFENSE (drag your goalie to block shots).</div>
+      <div>Pass: strong sideways flick • Fake: hold briefly • <span class="kbd">R</span> restart • <span class="kbd">P</span> pause</div>
     </div>
   </div>
 
@@ -101,8 +103,10 @@
   const ctx = canvas.getContext('2d');
 
   const scoreEl = document.getElementById('score');
+  const oppEl = document.getElementById('opp');
   const streakEl = document.getElementById('streak');
   const timeEl = document.getElementById('time');
+  const phaseEl = document.getElementById('phase');
   const overlay = document.getElementById('overlay');
   const ovTitle = document.getElementById('ovTitle');
   const ovBody = document.getElementById('ovBody');
@@ -230,13 +234,17 @@
   const state = {
     running: false,
     paused: false,
+    // match score
     score: 0,
+    opponentScore: 0,
+    // offense-only streaking
     streak: 0,
     best: 0,
     shots: 0,
-    // timed game
+    // match clock
     timeLeft: 60,
     timeLimit: 60,
+    phase: 'offense', // 'offense'|'defense'
     lastT: 0,
     dt: 0,
     message: null,
@@ -265,10 +273,14 @@
     x: W*0.5,
     y: rink.y + goal.h*0.9,
     vx: 0,
-    speed: rink.w*0.44, // px/s
+    speed: rink.w*0.44, // px/s (AI speed)
     react: 0.21, // seconds before reacting
     reactTimer: 0,
     targetX: W*0.5,
+
+    // Defense controls (player goalie)
+    playerSpeed: rink.w*1.25,
+    playerTargetX: W*0.5,
   };
 
   const aim = {
@@ -314,8 +326,11 @@
 
   function fullReset(){
     state.score = 0;
+    state.opponentScore = 0;
     state.streak = 0;
+    state.best = 0;
     state.shots = 0;
+    state.phase = 'offense';
     state.timeLeft = state.timeLimit;
     state.paused = false;
     pauseBtn.textContent = 'Pause';
@@ -325,8 +340,10 @@
 
   function hud(){
     scoreEl.textContent = String(state.score);
-    streakEl.textContent = String(state.streak);
+    oppEl.textContent = String(state.opponentScore);
+    streakEl.textContent = String(state.phase === 'offense' ? state.streak : 0);
     timeEl.textContent = String(Math.max(0, Math.ceil(state.timeLeft)));
+    phaseEl.textContent = state.phase === 'offense' ? 'Offense' : 'Defense';
   }
 
   function showOverlay(title, body, hint, startLabel='Start'){
@@ -450,13 +467,27 @@
     state.shots++;
   }
 
+  function switchToDefense(){
+    state.phase = 'defense';
+    state.timeLeft = state.timeLimit;
+    state.streak = 0;
+    resetRound();
+    // Put puck at opponent shooting spot (top area).
+    puck.x = W*0.5;
+    puck.y = rink.y + rink.h*0.22;
+    puck.active = false;
+    setMessage('DEFENSE!', 0.8);
+    hud();
+  }
+
   function endGame(){
     state.paused = true;
     pauseBtn.textContent = 'Resume';
+    const result = state.score > state.opponentScore ? 'You win!' : (state.score < state.opponentScore ? 'You lose' : 'Tie');
     showOverlay(
-      'Time!',
-      `Final score: ${state.score} (best streak: ${state.best})`,
-      'Tap Start to run it back. Try mixing passes + fakes.',
+      result,
+      `Final: You ${state.score} — Them ${state.opponentScore}`,
+      'Tap Restart for another match.',
       'Restart'
     );
   }
@@ -464,12 +495,16 @@
   function update(dt){
     if (!state.running || state.paused) return;
 
-    // Timed game countdown
+    // Timed phase countdown
     state.timeLeft -= dt;
     if (state.timeLeft <= 0){
       state.timeLeft = 0;
       hud();
-      endGame();
+      if (state.phase === 'offense'){
+        switchToDefense();
+      } else {
+        endGame();
+      }
       return;
     }
 
@@ -508,6 +543,41 @@
     };
     moveWinger(wingers.left);
     moveWinger(wingers.right);
+
+    // Defense phase: player controls goalie, opponent shoots.
+    if (state.phase === 'defense'){
+      const g = goalMouth();
+      // Move goalie toward playerTargetX with speed limit.
+      const dx = goalie.playerTargetX - goalie.x;
+      const maxMove = goalie.playerSpeed * dt;
+      goalie.x += clamp(dx, -maxMove, maxMove);
+      goalie.x = clamp(goalie.x, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
+
+      // Opponent shoots periodically.
+      if (!state.nextOppShotT) state.nextOppShotT = 0;
+      state.nextOppShotT -= dt;
+      if (state.nextOppShotT <= 0 && !puck.active){
+        // Spawn a shot from top toward the net.
+        puck.active = true;
+        puck.mode = 'shot';
+        puck.passTo = null;
+        puck.didFake = false;
+
+        // Choose a target: corners more likely.
+        const tgtBias = (Math.random() < 0.65) ? (Math.random() < 0.5 ? -1 : 1) : (Math.random()*2-1)*0.35;
+        const tx = (g.x + g.w*0.5) + tgtBias * (g.w*0.46);
+        const ty = rink.y + rink.h*0.86;
+        const ang = Math.atan2(ty - puck.y, tx - puck.x);
+        const speed = rink.h * (1.20 + Math.random()*0.35);
+        puck.vx = Math.cos(ang) * speed;
+        puck.vy = Math.sin(ang) * speed;
+        puck.spin = 0;
+
+        sfx.shoot(0.7);
+        // Next shot in ~1.1–1.8s
+        state.nextOppShotT = 1.1 + Math.random()*0.7;
+      }
+    }
 
     // Puck physics
     if (puck.active){
@@ -638,9 +708,13 @@
         puck.vy = Math.abs(puck.vy) * 0.65 + rink.h*0.15;
         puck.vx *= 0.6;
         puck.spin *= 0.25;
-        setMessage('Saved!');
+        if (state.phase === 'defense'){
+          setMessage('Save!', 0.55);
+        } else {
+          setMessage('Saved!');
+          state.streak = 0;
+        }
         sfx.save();
-        state.streak = 0;
         hud();
       }
 
@@ -660,12 +734,25 @@
       );
 
       if (inMouth && crossed && !touchingGoalie){
-        // Chance-based scoring for normal shots.
+        // If we're defending, this is an opponent goal (pure geometry).
+        if (state.phase === 'defense'){
+          state.opponentScore += 1;
+          hud();
+          setMessage('They scored!', 0.75);
+          sfx.goal();
+          puck.active = false;
+          setTimeout(() => {
+            resetRound();
+            puck.x = W*0.5;
+            puck.y = rink.y + rink.h*0.22;
+          }, 420);
+          return;
+        }
+
+        // Offense: chance-based scoring for normal shots.
         const shotSpeed = Math.hypot(puck.vx, puck.vy);
         const ch = shotChance({ shotSpeed, puckXAtLine: puck.x, didFake: !!puck.didFake });
 
-        // Convert the geometric "would be in" shot into a probability.
-        // If it doesn't go in, treat it as a save.
         if (Math.random() < ch.p){
           const points = 1 + Math.floor(state.streak/3);
           state.score += points;
@@ -680,7 +767,6 @@
           setTimeout(() => resetRound(), 420);
         } else {
           // Miss vs Save split.
-          // Low quality shots miss more often; higher quality shots get saved more often.
           const missChance = clamp(lerp(0.55, 0.15, ch.q), 0.10, 0.70);
           const missed = Math.random() < missChance;
 
@@ -694,9 +780,22 @@
         }
       }
 
-      // If puck falls back to bottom => round ends (miss)
+      // If puck falls back to bottom => round ends.
       if (puck.y - puck.r > b.bottom){
         puck.active = false;
+
+        if (state.phase === 'defense'){
+          // Opponent shot missed wide/high.
+          setMessage('They missed!', 0.65);
+          sfx.board();
+          setTimeout(() => {
+            resetRound();
+            puck.x = W*0.5;
+            puck.y = rink.y + rink.h*0.22;
+          }, 260);
+          return;
+        }
+
         if (state.streak > 0) setMessage('Miss — streak reset');
         state.streak = 0;
         hud();
@@ -1015,6 +1114,18 @@
   canvas.addEventListener('pointerdown', (ev) => {
     ev.preventDefault();
     if (!state.running || state.paused) return;
+
+    // Defense: drag goalie.
+    if (state.phase === 'defense'){
+      canvas.setPointerCapture(ev.pointerId);
+      aim.pointerId = ev.pointerId;
+      aim.dragging = true;
+      const p = canvasPointFromEvent(ev);
+      goalie.playerTargetX = clamp(p.x, (W*0.5 - goal.w*0.5) + goalie.w*0.5, (W*0.5 + goal.w*0.5) - goalie.w*0.5);
+      return;
+    }
+
+    // Offense: aim/shoot.
     if (puck.active) return;
 
     canvas.setPointerCapture(ev.pointerId);
@@ -1034,8 +1145,14 @@
     if (!aim.dragging || ev.pointerId !== aim.pointerId) return;
     ev.preventDefault();
     const p = canvasPointFromEvent(ev);
-    // Clamp aim within rink
     const b = rinkBounds();
+
+    if (state.phase === 'defense'){
+      goalie.playerTargetX = clamp(p.x, (W*0.5 - goal.w*0.5) + goalie.w*0.5, (W*0.5 + goal.w*0.5) - goalie.w*0.5);
+      return;
+    }
+
+    // Offense: Clamp aim within rink
     const nx = clamp(p.x, b.left, b.right);
     const ny = clamp(p.y, b.top, b.bottom);
 
@@ -1050,7 +1167,14 @@
     if (!aim.dragging || ev.pointerId !== aim.pointerId) return;
     ev.preventDefault();
 
-    // Fake mechanic: if you pause your finger briefly before release, goalie "bites" a bit.
+    // Defense: release just ends drag.
+    if (state.phase === 'defense'){
+      aim.dragging = false;
+      aim.pointerId = null;
+      return;
+    }
+
+    // Offense: Fake mechanic: if you pause your finger briefly before release, goalie "bites" a bit.
     const heldMs = performance.now() - aim.lastMoveT;
     const didFake = heldMs > 140;
 
@@ -1107,7 +1231,7 @@
   });
 
   // Initial overlay
-  showOverlay('Puck Rob', 'Flick hockey shots past the goalie. Build streaks for bigger points.', 'Tip: bank shots off the boards. Goalie reads your release.', 'Start');
+  showOverlay('Puck Rob', '60s offense: score as many as you can. Then 60s defense: drag your goalie and stop their shots. Higher score wins.', 'Tip: pass to a winger for one-timers. Hold briefly before release to fake.', 'Start');
   draw();
 })();
 </script>
