@@ -245,6 +245,7 @@
     timeLeft: 60,
     timeLimit: 60,
     phase: 'offense', // 'offense'|'defense'
+    nextOppShotT: 0,
     lastT: 0,
     dt: 0,
     message: null,
@@ -299,16 +300,25 @@
 
   function resetRound(){
     puck.x = W*0.5;
-    puck.y = rink.y + rink.h*0.82;
+    puck.y = state.phase === 'defense'
+      ? rink.y + rink.h*0.22
+      : rink.y + rink.h*0.82;
     puck.vx = 0; puck.vy = 0;
     puck.active = false;
     puck.spin = 0;
 
     goalie.x = W*0.5;
-    goalie.y = rink.y + goal.h*0.9;
+    const topGoal = goalMouth();
+    const bottomGoal = goalMouth('bottom');
+    const goalieTopY = topGoal.y + topGoal.h*0.55;
+    const goalieBottomY = bottomGoal.y + bottomGoal.h*0.45;
+    goalie.y = state.phase === 'defense' ? goalieBottomY : goalieTopY;
     goalie.vx = 0;
     goalie.reactTimer = 0;
     goalie.targetX = W*0.5;
+    goalie.playerTargetX = W*0.5;
+
+    if (state.phase === 'defense') state.nextOppShotT = 0;
 
     // wingers
     wingers.left.y  = rink.y + rink.h*0.62;
@@ -408,10 +418,11 @@
     };
   }
 
-  function goalMouth(){
+  function goalMouth(which='top'){
     const gx = W*0.5 - goal.w*0.5;
-    const gy = rink.y + goal.h*0.35;
-    return { x: gx, y: gy, w: goal.w, h: goal.h };
+    const topY = rink.y + goal.h*0.35;
+    const bottomY = rink.y + rink.h - goal.h*1.35;
+    return { x: gx, y: which === 'bottom' ? bottomY : topY, w: goal.w, h: goal.h };
   }
 
   function shootFromAim(didFake=false){
@@ -473,11 +484,17 @@
     state.timeLeft = state.timeLimit;
     state.streak = 0;
     resetRound();
+
+    // Move your goalie to the bottom net.
+    goalie.y = goalie.yBottom;
+    goalie.playerTargetX = goalie.x;
+
     // Put puck at opponent shooting spot (top area).
     puck.x = W*0.5;
     puck.y = rink.y + rink.h*0.22;
     puck.active = false;
-    setMessage(`DEFENSE TIME — you scored ${offenseGoals}.`, 1.6);
+
+    setMessage(`DEFENSE TIME — you scored ${offenseGoals}. Drag your goalie to block.`, 1.9);
     hud();
   }
 
@@ -526,6 +543,7 @@
 
     const b = rinkBounds();
     const g = goalMouth();
+    const playerGoal = goalMouth('bottom');
 
     // Goalie AI (offense only). In defense, player controls goalie.
     if (state.phase === 'offense' && puck.active){
@@ -554,15 +572,15 @@
 
     // Defense phase: player controls goalie, opponent shoots.
     if (state.phase === 'defense'){
-      const g = goalMouth();
+      const minX = playerGoal.x + goalie.w*0.5;
+      const maxX = playerGoal.x + playerGoal.w - goalie.w*0.5;
       // Move goalie toward playerTargetX with speed limit.
       const dx = goalie.playerTargetX - goalie.x;
       const maxMove = goalie.playerSpeed * dt;
       goalie.x += clamp(dx, -maxMove, maxMove);
-      goalie.x = clamp(goalie.x, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
+      goalie.x = clamp(goalie.x, minX, maxX);
 
       // Opponent shoots periodically.
-      if (!state.nextOppShotT) state.nextOppShotT = 0;
       state.nextOppShotT -= dt;
       if (state.nextOppShotT <= 0 && !puck.active){
         // Spawn a shot from top toward the net.
@@ -573,8 +591,8 @@
 
         // Choose a target: corners more likely.
         const tgtBias = (Math.random() < 0.65) ? (Math.random() < 0.5 ? -1 : 1) : (Math.random()*2-1)*0.35;
-        const tx = (g.x + g.w*0.5) + tgtBias * (g.w*0.46);
-        const ty = rink.y + rink.h*0.86;
+        const tx = (playerGoal.x + playerGoal.w*0.5) + tgtBias * (playerGoal.w*0.46);
+        const ty = playerGoal.y + playerGoal.h*0.45;
         const ang = Math.atan2(ty - puck.y, tx - puck.x);
         const speed = rink.h * (1.20 + Math.random()*0.35);
         puck.vx = Math.cos(ang) * speed;
@@ -729,14 +747,6 @@
       // Goal detection:
       // Offense (you shooting): puck crosses TOP goal line.
       // Defense (them shooting): puck crosses BOTTOM goal line.
-      const topGoalLineY = g.y + g.h*0.55;
-      const bottomGoalLineY = (rink.y + rink.h) - g.h*0.55;
-      const inMouth = (puck.x > g.x + puck.r && puck.x < g.x + g.w - puck.r);
-      const crossed = (state.phase === 'defense')
-        ? (puck.y + puck.r >= bottomGoalLineY)
-        : (puck.y - puck.r <= topGoalLineY);
-
-      // If it's currently intersecting the goalie we already treated it as a save; don't double-score.
       const goalieRect2 = { x: goalie.x - goalie.w*0.5, y: goalie.y - goalie.h*0.5, w: goalie.w, h: goalie.h };
       const touchingGoalie = (
         puck.x + puck.r > goalieRect2.x &&
@@ -745,50 +755,53 @@
         puck.y - puck.r < goalieRect2.y + goalieRect2.h
       );
 
-      if (inMouth && crossed && !touchingGoalie){
-        // If we're defending, this is an opponent goal (pure geometry).
-        if (state.phase === 'defense'){
+      if (state.phase === 'defense'){
+        const bottomGoalLineY = playerGoal.y + playerGoal.h*0.45;
+        const inPlayerMouth = (puck.x > playerGoal.x + puck.r && puck.x < playerGoal.x + playerGoal.w - puck.r);
+        const crossedPlayerLine = (puck.y + puck.r >= bottomGoalLineY);
+        if (inPlayerMouth && crossedPlayerLine && !touchingGoalie){
           state.opponentScore += 1;
           hud();
           setMessage('They scored!', 0.75);
           sfx.goal();
           puck.active = false;
-          setTimeout(() => {
-            resetRound();
-            puck.x = W*0.5;
-            puck.y = rink.y + rink.h*0.22;
-          }, 420);
+          setTimeout(() => resetRound(), 420);
           return;
         }
+      } else {
+        const topGoalLineY = g.y + g.h*0.55;
+        const inMouth = (puck.x > g.x + puck.r && puck.x < g.x + g.w - puck.r);
+        const crossedTopLine = (puck.y - puck.r <= topGoalLineY);
+        if (inMouth && crossedTopLine && !touchingGoalie){
+          // Offense: chance-based scoring for normal shots.
+          const shotSpeed = Math.hypot(puck.vx, puck.vy);
+          const ch = shotChance({ shotSpeed, puckXAtLine: puck.x, didFake: !!puck.didFake });
 
-        // Offense: chance-based scoring for normal shots.
-        const shotSpeed = Math.hypot(puck.vx, puck.vy);
-        const ch = shotChance({ shotSpeed, puckXAtLine: puck.x, didFake: !!puck.didFake });
+          if (Math.random() < ch.p){
+            const points = 1 + Math.floor(state.streak/3);
+            state.score += points;
+            state.streak += 1;
+            state.best = Math.max(state.best, state.streak);
+            hud();
 
-        if (Math.random() < ch.p){
-          const points = 1 + Math.floor(state.streak/3);
-          state.score += points;
-          state.streak += 1;
-          state.best = Math.max(state.best, state.streak);
-          hud();
+            setMessage(`${qualityLabel(ch.q)} SHOT GOAL! +${points} (${Math.round(ch.p*100)}%)`, 0.9);
+            sfx.goal();
 
-          setMessage(`${qualityLabel(ch.q)} SHOT GOAL! +${points} (${Math.round(ch.p*100)}%)`, 0.9);
-          sfx.goal();
+            puck.active = false;
+            setTimeout(() => resetRound(), 420);
+          } else {
+            // Miss vs Save split.
+            const missChance = clamp(lerp(0.55, 0.15, ch.q), 0.10, 0.70);
+            const missed = Math.random() < missChance;
 
-          puck.active = false;
-          setTimeout(() => resetRound(), 420);
-        } else {
-          // Miss vs Save split.
-          const missChance = clamp(lerp(0.55, 0.15, ch.q), 0.10, 0.70);
-          const missed = Math.random() < missChance;
+            setMessage(`${missed ? 'Miss' : 'Saved'} — ${qualityLabel(ch.q)} (${Math.round(ch.p*100)}%)`, 0.85);
+            if (missed) sfx.board(); else sfx.save();
 
-          setMessage(`${missed ? 'Miss' : 'Saved'} — ${qualityLabel(ch.q)} (${Math.round(ch.p*100)}%)`, 0.85);
-          if (missed) sfx.board(); else sfx.save();
-
-          state.streak = 0;
-          hud();
-          puck.active = false;
-          setTimeout(() => resetRound(), 360);
+            state.streak = 0;
+            hud();
+            puck.active = false;
+            setTimeout(() => resetRound(), 360);
+          }
         }
       }
 
@@ -800,11 +813,7 @@
           // Opponent shot missed wide/high.
           setMessage('They missed!', 0.65);
           sfx.board();
-          setTimeout(() => {
-            resetRound();
-            puck.x = W*0.5;
-            puck.y = rink.y + rink.h*0.22;
-          }, 260);
+          setTimeout(() => resetRound(), 260);
           return;
         }
 
@@ -1133,7 +1142,10 @@
       aim.pointerId = ev.pointerId;
       aim.dragging = true;
       const p = canvasPointFromEvent(ev);
-      goalie.playerTargetX = clamp(p.x, (W*0.5 - goal.w*0.5) + goalie.w*0.5, (W*0.5 + goal.w*0.5) - goalie.w*0.5);
+      const playerGoal = goalMouth('bottom');
+      const minX = playerGoal.x + goalie.w*0.5;
+      const maxX = playerGoal.x + playerGoal.w - goalie.w*0.5;
+      goalie.playerTargetX = clamp(p.x, minX, maxX);
       return;
     }
 
@@ -1160,7 +1172,10 @@
     const b = rinkBounds();
 
     if (state.phase === 'defense'){
-      goalie.playerTargetX = clamp(p.x, (W*0.5 - goal.w*0.5) + goalie.w*0.5, (W*0.5 + goal.w*0.5) - goalie.w*0.5);
+      const playerGoal = goalMouth('bottom');
+      const minX = playerGoal.x + goalie.w*0.5;
+      const maxX = playerGoal.x + playerGoal.w - goalie.w*0.5;
+      goalie.playerTargetX = clamp(p.x, minX, maxX);
       return;
     }
 
