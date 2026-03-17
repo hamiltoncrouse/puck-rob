@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#07121f" />
+  <title>Puck Rob</title>
+  <style>
+    :root{
+      --bg0:#06101c;
+      --bg1:#081a2e;
+      --ice:#0e2a44;
+      --ice2:#0a2238;
+      --text:#e9f3ff;
+      --muted:#9fb8d1;
+      --red:#ff3b5c;
+      --blue:#3aa0ff;
+      --gold:#ffd166;
+      --green:#31d17a;
+      --shadow: rgba(0,0,0,.35);
+    }
+    html,body{height:100%; margin:0; background: radial-gradient(1200px 900px at 50% 25%, var(--bg1), var(--bg0)); color:var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
+    body{display:flex; align-items:center; justify-content:center;}
+
+    .wrap{width:min(560px, 100vw); padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); box-sizing:border-box;}
+
+    .hud{display:flex; gap:10px; align-items:center; justify-content:space-between; margin: 0 0 10px;}
+    .hud .left{display:flex; gap:10px; align-items:center;}
+    .pill{background: rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.10); box-shadow: 0 10px 30px var(--shadow); border-radius: 999px; padding: 8px 12px; font-weight: 700; letter-spacing:.2px;}
+    .pill small{display:block; font-weight:600; color:var(--muted); letter-spacing:.3px;}
+
+    .btn{appearance:none; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.08); color:var(--text); border-radius: 12px; padding: 10px 12px; font-weight: 800; box-shadow: 0 10px 30px var(--shadow);}
+    .btn:active{transform: translateY(1px);}
+
+    canvas{width:100%; height:auto; aspect-ratio: 9/16; border-radius: 18px; border:1px solid rgba(255,255,255,.12); background: linear-gradient(180deg, rgba(14,42,68,.8), rgba(10,34,56,.9)); box-shadow: 0 18px 55px var(--shadow);
+      touch-action: none; -webkit-user-select:none; user-select:none;
+    }
+
+    .footer{margin-top:10px; color:var(--muted); font-size: 12px; line-height:1.35; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;}
+    .footer b{color:var(--text)}
+
+    .overlay{position:fixed; inset:0; display:none; align-items:center; justify-content:center; padding: 18px; background: rgba(0,0,0,.55); backdrop-filter: blur(6px);}
+    .card{width:min(520px, 100%); border-radius: 18px; border:1px solid rgba(255,255,255,.12); background: rgba(10,18,28,.92); box-shadow: 0 18px 60px rgba(0,0,0,.6); padding: 16px;}
+    .card h1{margin: 0 0 6px; font-size: 24px; letter-spacing:.2px;}
+    .card p{margin: 8px 0; color: var(--muted);}
+    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center;}
+    .row .btn{flex:1; min-width: 140px;}
+    .hint{font-size: 12px; color: var(--muted);}
+
+    .kbd{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px; padding: 2px 6px; border-radius: 8px; border:1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.06); color: var(--text);}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hud">
+      <div class="left">
+        <div class="pill" id="scorePill">Score <small id="score">0</small></div>
+        <div class="pill" id="streakPill">Streak <small id="streak">0</small></div>
+      </div>
+      <button class="btn" id="pauseBtn" aria-label="Pause">Pause</button>
+    </div>
+
+    <canvas id="c" width="720" height="1280" aria-label="Puck Rob game canvas"></canvas>
+
+    <div class="footer">
+      <div><b>How to play:</b> swipe / drag to aim, release to shoot.</div>
+      <div><span class="kbd">R</span> restart • <span class="kbd">P</span> pause</div>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay" role="dialog" aria-modal="true">
+    <div class="card">
+      <h1 id="ovTitle">Puck Rob</h1>
+      <p id="ovBody">Flick hockey shots past the goalie. Build streaks for bigger points.</p>
+      <div class="row" style="margin-top:12px;">
+        <button class="btn" id="startBtn">Start</button>
+        <button class="btn" id="howBtn">How to play</button>
+      </div>
+      <p class="hint" id="ovHint" style="margin-top:10px;">Tip: bank shots off the boards. Goalie reads your release.</p>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+
+  const scoreEl = document.getElementById('score');
+  const streakEl = document.getElementById('streak');
+  const overlay = document.getElementById('overlay');
+  const ovTitle = document.getElementById('ovTitle');
+  const ovBody = document.getElementById('ovBody');
+  const ovHint = document.getElementById('ovHint');
+  const startBtn = document.getElementById('startBtn');
+  const howBtn = document.getElementById('howBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+
+  // Coordinate system is canvas pixels.
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // Rink dimensions within canvas.
+  const rink = { x: W*0.08, y: H*0.08, w: W*0.84, h: H*0.84 };
+  const goal = { w: rink.w*0.52, h: rink.h*0.06 };
+
+  const state = {
+    running: false,
+    paused: false,
+    score: 0,
+    streak: 0,
+    best: 0,
+    shots: 0,
+    lastT: 0,
+    dt: 0,
+    message: null,
+    messageT: 0,
+  };
+
+  const puck = {
+    r: W*0.022,
+    x: W*0.5,
+    y: rink.y + rink.h*0.82,
+    vx: 0,
+    vy: 0,
+    active: false,
+    spin: 0,
+  };
+
+  const goalie = {
+    w: goal.w*0.34,
+    h: goal.h*1.6,
+    x: W*0.5,
+    y: rink.y + goal.h*0.9,
+    vx: 0,
+    speed: rink.w*0.55, // px/s
+    react: 0.16, // seconds before reacting
+    reactTimer: 0,
+    targetX: W*0.5,
+  };
+
+  const aim = {
+    dragging: false,
+    startX: 0,
+    startY: 0,
+    curX: 0,
+    curY: 0,
+    pointerId: null,
+  };
+
+  function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+
+  function resetRound(){
+    puck.x = W*0.5;
+    puck.y = rink.y + rink.h*0.82;
+    puck.vx = 0; puck.vy = 0;
+    puck.active = false;
+    puck.spin = 0;
+
+    goalie.x = W*0.5;
+    goalie.y = rink.y + goal.h*0.9;
+    goalie.vx = 0;
+    goalie.reactTimer = 0;
+    goalie.targetX = W*0.5;
+
+    aim.dragging = false;
+    aim.pointerId = null;
+
+    state.message = null;
+  }
+
+  function fullReset(){
+    state.score = 0;
+    state.streak = 0;
+    state.shots = 0;
+    state.paused = false;
+    pauseBtn.textContent = 'Pause';
+    resetRound();
+    hud();
+  }
+
+  function hud(){
+    scoreEl.textContent = String(state.score);
+    streakEl.textContent = String(state.streak);
+  }
+
+  function showOverlay(title, body, hint, startLabel='Start'){
+    ovTitle.textContent = title;
+    ovBody.textContent = body;
+    ovHint.textContent = hint || '';
+    startBtn.textContent = startLabel;
+    overlay.style.display = 'flex';
+  }
+
+  function hideOverlay(){ overlay.style.display = 'none'; }
+
+  function setMessage(text, seconds=1.1){
+    state.message = text;
+    state.messageT = seconds;
+  }
+
+  function rinkBounds(){
+    return {
+      left: rink.x,
+      right: rink.x + rink.w,
+      top: rink.y,
+      bottom: rink.y + rink.h,
+    };
+  }
+
+  function goalMouth(){
+    const gx = W*0.5 - goal.w*0.5;
+    const gy = rink.y + goal.h*0.35;
+    return { x: gx, y: gy, w: goal.w, h: goal.h };
+  }
+
+  function shootFromAim(){
+    // Convert drag vector into velocity.
+    const dx = aim.curX - aim.startX;
+    const dy = aim.curY - aim.startY;
+
+    // Require an upward flick (dy negative).
+    const power = clamp(Math.hypot(dx, dy), 0, W*0.6);
+    if (power < W*0.04){
+      setMessage('Flick harder');
+      return;
+    }
+
+    const dirX = dx / (power || 1);
+    const dirY = dy / (power || 1);
+
+    // Bias to forward shots (upwards). If mostly downward, cancel.
+    if (dirY > -0.15){
+      setMessage('Shoot toward the net');
+      return;
+    }
+
+    // Speed tuning.
+    const base = rink.h * 1.35; // px/s
+    const v = base * (power / (W*0.6));
+
+    puck.vx = dirX * v;
+    puck.vy = dirY * v;
+    puck.active = true;
+
+    // Add a little spin based on lateral component.
+    puck.spin = clamp(dirX * 1.4, -1.2, 1.2);
+
+    // Goalie chooses a read a moment after release.
+    goalie.reactTimer = goalie.react;
+    goalie.targetX = clamp(puck.x + dirX * goal.w*0.28, W*0.5 - goal.w*0.5 + goalie.w*0.5, W*0.5 + goal.w*0.5 - goalie.w*0.5);
+
+    state.shots++;
+  }
+
+  function update(dt){
+    if (!state.running || state.paused) return;
+
+    // Message timer
+    if (state.messageT > 0){
+      state.messageT -= dt;
+      if (state.messageT <= 0) state.message = null;
+    }
+
+    const b = rinkBounds();
+    const g = goalMouth();
+
+    // Goalie AI
+    if (puck.active){
+      if (goalie.reactTimer > 0){
+        goalie.reactTimer -= dt;
+      } else {
+        // Track puck but with lag and limits.
+        const follow = clamp(puck.x + puck.vx*0.08, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
+        // Blend with initial guess to feel "read"-y.
+        goalie.targetX = goalie.targetX*0.65 + follow*0.35;
+      }
+
+      const dx = goalie.targetX - goalie.x;
+      const maxMove = goalie.speed * dt;
+      goalie.x += clamp(dx, -maxMove, maxMove);
+      goalie.x = clamp(goalie.x, g.x + goalie.w*0.5, g.x + g.w - goalie.w*0.5);
+    }
+
+    // Puck physics
+    if (puck.active){
+      // Magnus-ish curve (tiny)
+      puck.vx += puck.spin * 18 * dt;
+
+      puck.x += puck.vx * dt;
+      puck.y += puck.vy * dt;
+
+      // Slight friction
+      puck.vx *= Math.pow(0.992, dt*60);
+      puck.vy *= Math.pow(0.995, dt*60);
+
+      // Side boards bounce
+      if (puck.x - puck.r < b.left){
+        puck.x = b.left + puck.r;
+        puck.vx *= -0.92;
+        puck.spin *= -0.8;
+      }
+      if (puck.x + puck.r > b.right){
+        puck.x = b.right - puck.r;
+        puck.vx *= -0.92;
+        puck.spin *= -0.8;
+      }
+
+      // Top boards (behind net) bounce
+      if (puck.y - puck.r < b.top){
+        puck.y = b.top + puck.r;
+        puck.vy *= -0.7;
+      }
+
+      // Check for save/collision with goalie (simple AABB)
+      const goalieRect = { x: goalie.x - goalie.w*0.5, y: goalie.y - goalie.h*0.5, w: goalie.w, h: goalie.h };
+      if (
+        puck.x + puck.r > goalieRect.x &&
+        puck.x - puck.r < goalieRect.x + goalieRect.w &&
+        puck.y + puck.r > goalieRect.y &&
+        puck.y - puck.r < goalieRect.y + goalieRect.h
+      ){
+        // Save: reflect puck downward and kill streak.
+        puck.vy = Math.abs(puck.vy) * 0.65 + rink.h*0.15;
+        puck.vx *= 0.6;
+        puck.spin *= 0.25;
+        setMessage('Saved!');
+        state.streak = 0;
+        hud();
+      }
+
+      // Goal detection: puck crosses goal line within mouth, above goalie zone.
+      const goalLineY = g.y + g.h*0.55;
+      const inMouth = (puck.x > g.x + puck.r && puck.x < g.x + g.w - puck.r);
+      const crossed = (puck.y - puck.r <= goalLineY);
+      const pastGoalie = (puck.y + puck.r < goalie.y - goalie.h*0.4);
+
+      if (inMouth && crossed && pastGoalie){
+        // Score!
+        const points = 1 + Math.floor(state.streak/3);
+        state.score += points;
+        state.streak += 1;
+        state.best = Math.max(state.best, state.streak);
+        hud();
+
+        setMessage(points > 1 ? `GOAL! +${points}` : 'GOAL!');
+
+        // New round after a short delay
+        puck.active = false;
+        setTimeout(() => resetRound(), 420);
+      }
+
+      // If puck falls back to bottom => round ends (miss)
+      if (puck.y - puck.r > b.bottom){
+        puck.active = false;
+        if (state.streak > 0) setMessage('Miss — streak reset');
+        state.streak = 0;
+        hud();
+        setTimeout(() => resetRound(), 260);
+      }
+    }
+  }
+
+  function draw(){
+    // background
+    ctx.clearRect(0,0,W,H);
+
+    // Rink
+    const rx = rink.x, ry = rink.y, rw = rink.w, rh = rink.h;
+    roundRect(rx, ry, rw, rh, 22, 'rgba(255,255,255,.06)', 'rgba(255,255,255,.10)');
+
+    // Ice pattern
+    ctx.save();
+    ctx.beginPath();
+    roundedPath(rx, ry, rw, rh, 22);
+    ctx.clip();
+
+    // subtle stripes
+    for (let i=0;i<18;i++){
+      const y = ry + (i/18)*rh;
+      ctx.fillStyle = i%2===0 ? 'rgba(255,255,255,.03)' : 'rgba(255,255,255,.015)';
+      ctx.fillRect(rx, y, rw, rh/18 + 1);
+    }
+
+    // center line + circles
+    ctx.strokeStyle = 'rgba(255,59,92,.35)';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.moveTo(rx, ry + rh*0.5);
+    ctx.lineTo(rx+rw, ry + rh*0.5);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(58,160,255,.25)';
+    ctx.lineWidth = 6;
+    circle(W*0.5, ry + rh*0.58, rw*0.12);
+    ctx.stroke();
+
+    // Goal
+    const g = goalMouth();
+    ctx.strokeStyle = 'rgba(255,255,255,.18)';
+    ctx.lineWidth = 4;
+    roundRect(g.x, g.y, g.w, g.h, 12, 'rgba(0,0,0,0)', 'rgba(255,255,255,.18)');
+
+    // Crease
+    ctx.strokeStyle = 'rgba(58,160,255,.25)';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.arc(W*0.5, g.y + g.h*0.85, g.w*0.24, Math.PI, 0);
+    ctx.stroke();
+
+    ctx.restore();
+
+    // Goalie
+    const goalieRect = { x: goalie.x - goalie.w*0.5, y: goalie.y - goalie.h*0.5, w: goalie.w, h: goalie.h };
+    ctx.fillStyle = 'rgba(255,209,102,.85)';
+    ctx.strokeStyle = 'rgba(0,0,0,.25)';
+    ctx.lineWidth = 3;
+    roundRect(goalieRect.x, goalieRect.y, goalieRect.w, goalieRect.h, 18, ctx.fillStyle, ctx.strokeStyle);
+
+    // Goalie mask
+    ctx.fillStyle = 'rgba(6,16,28,.45)';
+    circle(goalie.x, goalieRect.y + goalieRect.h*0.38, goalieRect.w*0.18);
+    ctx.fill();
+
+    // Puck
+    ctx.fillStyle = 'rgba(0,0,0,.75)';
+    ctx.strokeStyle = 'rgba(255,255,255,.10)';
+    ctx.lineWidth = 2;
+    circle(puck.x, puck.y, puck.r);
+    ctx.fill();
+    ctx.stroke();
+
+    // Aim guide
+    if (!puck.active && aim.dragging){
+      const dx = aim.curX - aim.startX;
+      const dy = aim.curY - aim.startY;
+      const mag = Math.hypot(dx, dy);
+      const strength = clamp(mag / (W*0.6), 0, 1);
+
+      ctx.save();
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = `rgba(58,160,255,${0.15 + strength*0.55})`;
+      ctx.lineWidth = 10;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(aim.startX, aim.startY);
+      ctx.lineTo(aim.curX, aim.curY);
+      ctx.stroke();
+
+      // Arrow head
+      const ang = Math.atan2(dy, dx);
+      const ah = 26;
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.moveTo(aim.curX, aim.curY);
+      ctx.lineTo(aim.curX - ah*Math.cos(ang - 0.45), aim.curY - ah*Math.sin(ang - 0.45));
+      ctx.moveTo(aim.curX, aim.curY);
+      ctx.lineTo(aim.curX - ah*Math.cos(ang + 0.45), aim.curY - ah*Math.sin(ang + 0.45));
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Message
+    if (state.message){
+      ctx.save();
+      ctx.font = '800 40px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,255,255,.92)';
+      ctx.shadowColor = 'rgba(0,0,0,.35)';
+      ctx.shadowBlur = 18;
+      ctx.fillText(state.message, W*0.5, rink.y + rink.h*0.12);
+      ctx.restore();
+    }
+
+    // Pause overlay text
+    if (state.paused && state.running){
+      ctx.save();
+      ctx.fillStyle = 'rgba(0,0,0,.35)';
+      ctx.fillRect(0,0,W,H);
+      ctx.fillStyle = 'rgba(233,243,255,.95)';
+      ctx.textAlign = 'center';
+      ctx.font = '900 56px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+      ctx.fillText('Paused', W*0.5, H*0.5 - 20);
+      ctx.font = '700 26px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+      ctx.fillStyle = 'rgba(159,184,209,.95)';
+      ctx.fillText('Tap Pause to resume', W*0.5, H*0.5 + 26);
+      ctx.restore();
+    }
+
+    // Title watermark
+    ctx.save();
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = 'white';
+    ctx.font = '900 24px system-ui';
+    ctx.fillText('PUCK ROB', rink.x + 16, rink.y + 34);
+    ctx.restore();
+  }
+
+  function circle(x,y,r){
+    ctx.beginPath();
+    ctx.arc(x,y,r,0,Math.PI*2);
+  }
+
+  function roundedPath(x,y,w,h,r){
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y, x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x, y+h, rr);
+    ctx.arcTo(x, y+h, x, y, rr);
+    ctx.arcTo(x, y, x+w, y, rr);
+    ctx.closePath();
+  }
+
+  function roundRect(x,y,w,h,r,fill,stroke){
+    roundedPath(x,y,w,h,r);
+    if (fill){ ctx.fillStyle = fill; ctx.fill(); }
+    if (stroke){ ctx.strokeStyle = stroke; ctx.stroke(); }
+  }
+
+  function start(){
+    state.running = true;
+    state.paused = false;
+    pauseBtn.textContent = 'Pause';
+    hideOverlay();
+    fullReset();
+    state.lastT = performance.now();
+    requestAnimationFrame(loop);
+  }
+
+  function togglePause(){
+    if (!state.running) return;
+    state.paused = !state.paused;
+    pauseBtn.textContent = state.paused ? 'Resume' : 'Pause';
+  }
+
+  function loop(t){
+    if (!state.running) return;
+    const dt = Math.min(0.033, (t - state.lastT) / 1000);
+    state.lastT = t;
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function canvasPointFromEvent(ev){
+    const rect = canvas.getBoundingClientRect();
+    const x = (ev.clientX - rect.left) * (W / rect.width);
+    const y = (ev.clientY - rect.top) * (H / rect.height);
+    return {x,y};
+  }
+
+  // Input: Pointer events
+  canvas.addEventListener('pointerdown', (ev) => {
+    ev.preventDefault();
+    if (!state.running || state.paused) return;
+    if (puck.active) return;
+
+    canvas.setPointerCapture(ev.pointerId);
+    aim.pointerId = ev.pointerId;
+    aim.dragging = true;
+
+    const p = canvasPointFromEvent(ev);
+    aim.startX = puck.x;
+    aim.startY = puck.y;
+    aim.curX = p.x;
+    aim.curY = p.y;
+  }, {passive:false});
+
+  canvas.addEventListener('pointermove', (ev) => {
+    if (!aim.dragging || ev.pointerId !== aim.pointerId) return;
+    ev.preventDefault();
+    const p = canvasPointFromEvent(ev);
+    // Clamp aim within rink
+    const b = rinkBounds();
+    aim.curX = clamp(p.x, b.left, b.right);
+    aim.curY = clamp(p.y, b.top, b.bottom);
+  }, {passive:false});
+
+  function endDrag(ev){
+    if (!aim.dragging || ev.pointerId !== aim.pointerId) return;
+    ev.preventDefault();
+    aim.dragging = false;
+    aim.pointerId = null;
+    shootFromAim();
+  }
+
+  canvas.addEventListener('pointerup', endDrag, {passive:false});
+  canvas.addEventListener('pointercancel', endDrag, {passive:false});
+
+  // Buttons / keys
+  startBtn.addEventListener('click', start);
+  howBtn.addEventListener('click', () => {
+    ovTitle.textContent = 'How to play';
+    ovBody.textContent = 'Drag to aim. Release to shoot. Score goals past the goalie. Build streaks for bonus points.';
+    ovHint.textContent = 'Tip: quick diagonal flicks are harder to read. Bank shots off the boards.';
+    startBtn.textContent = 'Play';
+  });
+
+  pauseBtn.addEventListener('click', () => {
+    if (!state.running){
+      showOverlay('Puck Rob', 'Flick hockey shots past the goalie. Build streaks for bigger points.', 'Tip: bank shots off the boards. Goalie reads your release.', 'Start');
+      return;
+    }
+    togglePause();
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() === 'p') togglePause();
+    if (e.key.toLowerCase() === 'r'){
+      if (!state.running){ start(); }
+      else { fullReset(); }
+    }
+  });
+
+  // Initial overlay
+  showOverlay('Puck Rob', 'Flick hockey shots past the goalie. Build streaks for bigger points.', 'Tip: bank shots off the boards. Goalie reads your release.', 'Start');
+  draw();
+})();
+</script>
+</body>
+</html>
