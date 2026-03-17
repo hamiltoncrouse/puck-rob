@@ -246,13 +246,14 @@
   };
 
   const goalie = {
-    w: goal.w*0.34,
-    h: goal.h*1.6,
+    // Slightly smaller + a bit less cracked.
+    w: goal.w*0.28,
+    h: goal.h*1.45,
     x: W*0.5,
     y: rink.y + goal.h*0.9,
     vx: 0,
-    speed: rink.w*0.55, // px/s
-    react: 0.16, // seconds before reacting
+    speed: rink.w*0.44, // px/s
+    react: 0.21, // seconds before reacting
     reactTimer: 0,
     targetX: W*0.5,
   };
