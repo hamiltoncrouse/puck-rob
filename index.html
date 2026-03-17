@@ -484,17 +484,8 @@
     state.timeLeft = state.timeLimit;
     state.streak = 0;
     resetRound();
-
-    // Move your goalie to the bottom net.
-    goalie.y = goalie.yBottom;
-    goalie.playerTargetX = goalie.x;
-
-    // Put puck at opponent shooting spot (top area).
-    puck.x = W*0.5;
-    puck.y = rink.y + rink.h*0.22;
     puck.active = false;
-
-    setMessage(`DEFENSE TIME — you scored ${offenseGoals}. Drag your goalie to block.`, 1.9);
+    setMessage(`DEFENSE TIME — you scored ${offenseGoals}.`, 1.6);
     hud();
   }
 
